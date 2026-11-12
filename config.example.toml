@@ -1,0 +1,42 @@
+[general]
+config_path = "/opt/haproxy/haproxy.cfg"
+backup_dir = "/opt/haproxy/backups"
+auto_backup = true
+max_backups = 30
+
+[haproxy]
+mode = "docker"
+validation_enabled = true
+validation_timeout_seconds = 15
+
+[docker]
+container_name = "haproxy"
+compose_file = "/opt/haproxy/compose.yaml"
+service_name = "haproxy"
+apply_method = "recreate"
+
+[native]
+binary = "haproxy"
+service_name = "haproxy"
+apply_method = "restart"
+
+[network]
+default_bind_address = "127.0.0.1"
+default_start_port = 10443
+default_target_port = 443
+connect_timeout_seconds = 5
+sni = ""
+
+[healthcheck]
+enabled = true
+interval_seconds = 3
+fall = 2
+rise = 2
+
+[monitoring]
+runtime_socket = ""
+
+[ui]
+refresh_interval_seconds = 3
+confirm_before_apply = true
+show_advanced_options = false
