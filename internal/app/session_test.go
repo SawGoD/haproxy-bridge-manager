@@ -44,9 +44,15 @@ func TestOfficialRejectAndConflict(t *testing.T) {
 	}
 }
 
-type nativeMock struct{ failRestart bool }
+type nativeMock struct {
+	failRestart bool
+	configPath  string
+}
 
 func (r *nativeMock) Run(_ context.Context, name string, a ...string) ([]byte, error) {
+	if name == "systemctl" && len(a) > 0 && a[0] == "show" {
+		return []byte("{ path=/usr/sbin/haproxy ; argv[]=/usr/sbin/haproxy -Ws -f " + r.configPath + " ; }"), nil
+	}
 	if name == "systemctl" && len(a) > 0 && a[0] == "restart" && r.failRestart {
 		r.failRestart = false
 		return nil, errors.New("restart failed")
@@ -79,7 +85,7 @@ func TestRollbackOnlyAfterConfirmedApply(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	runner := &nativeMock{}
+	runner := &nativeMock{configPath: cfg.General.ConfigPath}
 	s.Runner = runner
 	if e = s.Apply(); e != nil {
 		t.Fatal(e)

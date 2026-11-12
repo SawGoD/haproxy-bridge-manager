@@ -130,3 +130,21 @@ func TestGracefulRequiresVerifiedMasterAndNewWorker(t *testing.T) {
 		}
 	}
 }
+
+type serviceFake string
+
+func (f serviceFake) Run(context.Context, string, ...string) ([]byte, error) {
+	return []byte(string(f)), nil
+}
+func TestNativeManagedInput(t *testing.T) {
+	for _, tc := range []struct {
+		argv string
+		ok   bool
+	}{{"/usr/sbin/haproxy -Ws -f /tmp/managed.cfg", true}, {"/usr/sbin/haproxy -Ws -f /tmp/other.cfg", false}, {"/bin/sh -c haproxy", false}, {"/usr/sbin/haproxy -f /tmp/managed.cfg -f /tmp/extra.cfg", false}} {
+		n := Native{Runner: serviceFake("{ path=/usr/sbin/haproxy ; argv[]=" + tc.argv + " ; }"), Binary: "haproxy", Service: "haproxy"}
+		e := n.CheckServiceConfig(context.Background(), "/tmp/managed.cfg")
+		if (e == nil) != tc.ok {
+			t.Fatalf("%s: %v", tc.argv, e)
+		}
+	}
+}

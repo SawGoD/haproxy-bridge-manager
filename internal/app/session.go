@@ -125,6 +125,13 @@ func (s *Session) Apply() error {
 	if e = s.Validate(b); e != nil {
 		return e
 	}
+	if s.Settings.HAProxy.Mode == "native" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.Settings.HAProxy.ValidationTimeout)*time.Second)
+		defer cancel()
+		if e = (platform.Native{Runner: s.Runner, Binary: s.Settings.Native.Binary, Service: s.Settings.Native.ServiceName}).CheckServiceConfig(ctx, s.Path); e != nil {
+			return e
+		}
+	}
 	if _, e = s.Backups.Create(s.Path); e != nil {
 		return e
 	}

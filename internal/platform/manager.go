@@ -356,3 +356,40 @@ func processIDs(s string) map[string]bool {
 	}
 	return out
 }
+
+// CheckServiceConfig rejects units whose effective HAProxy configuration input
+// cannot be tied to the managed file without interpreting a shell or variables.
+func (n Native) CheckServiceConfig(ctx context.Context, path string) error {
+	if e := safe(n.Service); e != nil {
+		return e
+	}
+	b, e := n.Runner.Run(ctx, "systemctl", "show", "--property=ExecStart", "--value", n.Service)
+	if e != nil {
+		return e
+	}
+	_, argv, ok := strings.Cut(string(b), "argv[]=")
+	if !ok {
+		return errors.New("systemd ExecStart argv unavailable; managed config cannot be verified")
+	}
+	argv, _, _ = strings.Cut(argv, " ;")
+	if strings.ContainsAny(argv, "\\\"'$`\n") {
+		return errors.New("complex systemd ExecStart requires manual verification")
+	}
+	args := strings.Fields(argv)
+	if len(args) == 0 || filepath.Base(args[0]) != filepath.Base(n.Binary) {
+		return errors.New("systemd service does not directly execute the selected HAProxy binary")
+	}
+	count := 0
+	for i, a := range args {
+		if a == "-f" {
+			if i+1 >= len(args) || args[i+1] != path {
+				return errors.New("systemd service reads another configuration")
+			}
+			count++
+		}
+	}
+	if count != 1 {
+		return errors.New("systemd must have exactly one verified -f input")
+	}
+	return nil
+}
