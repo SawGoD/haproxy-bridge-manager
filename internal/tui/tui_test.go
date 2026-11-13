@@ -61,7 +61,10 @@ func TestFifthNodeEditor(t *testing.T) {
 		t.Fatalf("expected four routes: %s", m.View())
 	}
 	m.editor(true)
-	for i, v := range []string{"NL-1", "nl1_in", "nl1_out", "127.0.0.1", "10447", "5s", "30s", "30s"} {
+	if len(m.fields) != 7 || strings.Contains(m.nodeView(), "Название ноды") {
+		t.Fatal("redundant name field remains")
+	}
+	for i, v := range []string{"nl1_in", "nl1_out", "127.0.0.1", "10447", "5s", "30s", "30s"} {
 		m.fields[i].SetValue(v)
 	}
 	m.area.SetValue("public [2001:db8::1]:443 primary 1 check enabled 3s 2 2\nnb 100.100.10.20:443 backup 1 check enabled 3s 2 2")
@@ -80,6 +83,10 @@ func TestFifthNodeEditor(t *testing.T) {
 	}
 	if !strings.Contains(string(m.s.Document.Bytes()), "lv1_in") {
 		t.Fatal("lv1 renamed")
+	}
+	f, err := m.s.Document.Frontend("nl1_in")
+	if err != nil || f.Bind.Port != 10447 || f.Bind.Address != "127.0.0.1" || f.Backend != "nl1_out" {
+		t.Fatal(f, err)
 	}
 	backend, e := m.s.Document.Backend("nl1_out")
 	if e != nil || len(backend.Servers) != 2 || !backend.Servers[1].Backup {

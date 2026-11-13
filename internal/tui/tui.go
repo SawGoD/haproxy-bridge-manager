@@ -167,7 +167,7 @@ func (m *Model) editor(add bool) {
 	m.fields = nil
 	m.focus = 0
 	m.editing = ""
-	values := []string{"", "", "", m.cfg.Network.DefaultBindAddress, strconv.Itoa(m.cfg.Network.DefaultStartPort), "", "", ""}
+	values := []string{"", "", m.cfg.Network.DefaultBindAddress, strconv.Itoa(m.cfg.Network.DefaultStartPort), "", "", ""}
 	if !add {
 		rows := m.rows()
 		if len(rows) == 0 {
@@ -175,18 +175,14 @@ func (m *Model) editor(add bool) {
 		}
 		f := rows[m.cursor]
 		m.editing = f.Name
-		label := m.cfg.Names[f.Name]
-		if label == "" {
-			label = f.Name
-		}
-		values = []string{label, f.Name, f.Backend, f.Bind.Address, strconv.Itoa(f.Bind.Port), "", f.TimeoutClient, ""}
+		values = []string{f.Name, f.Backend, f.Bind.Address, strconv.Itoa(f.Bind.Port), "", f.TimeoutClient, ""}
 		b, e := m.s.Document.Backend(f.Backend)
 		if e != nil {
 			m.notice = e.Error()
 			return
 		}
-		values[5] = b.TimeoutConnect
-		values[7] = b.TimeoutServer
+		values[4] = b.TimeoutConnect
+		values[6] = b.TimeoutServer
 		var lines []string
 		for _, s := range b.Servers {
 			role := "primary"
@@ -234,7 +230,7 @@ func (m *Model) editor(add bool) {
 			l, e := net.Listen("tcp", net.JoinHostPort(m.cfg.Network.DefaultBindAddress, strconv.Itoa(p)))
 			if e == nil {
 				l.Close()
-				values[4] = strconv.Itoa(p)
+				values[3] = strconv.Itoa(p)
 				break
 			}
 		}
@@ -246,7 +242,7 @@ func (m *Model) editor(add bool) {
 	}
 	for i, v := range values {
 		f := textinput.New()
-		f.Prompt = []string{"Name: ", "Frontend: ", "Backend: ", "Bind address: ", "Port: ", "Connect timeout: ", "Client timeout: ", "Server timeout: "}[i]
+		f.Prompt = []string{"Frontend: ", "Backend: ", "Bind address: ", "Port: ", "Connect timeout: ", "Client timeout: ", "Server timeout: "}[i]
 		f.SetValue(v)
 		f.CharLimit = 253
 		f.Width = 50
@@ -262,11 +258,11 @@ func (m *Model) candidate() error {
 		return e
 	}
 	v := func(i int) string { return strings.TrimSpace(m.fields[i].Value()) }
-	p, e := strconv.Atoi(v(4))
+	p, e := strconv.Atoi(v(3))
 	if e != nil {
 		return e
 	}
-	f := haproxy.Frontend{Name: v(1), Backend: v(2), Bind: haproxy.Bind{Address: v(3), Port: p}, TimeoutClient: v(6)}
+	f := haproxy.Frontend{Name: v(0), Backend: v(1), Bind: haproxy.Bind{Address: v(2), Port: p}, TimeoutClient: v(5)}
 	if m.editing != "" {
 		old, e := d.Frontend(m.editing)
 		if e != nil {
@@ -339,7 +335,7 @@ func (m *Model) candidate() error {
 		return fmt.Errorf("backend must have a server")
 	}
 	if m.editing == "" {
-		if e = d.CreateBackend(haproxy.Backend{Name: f.Backend, Servers: servers, TimeoutConnect: v(5), TimeoutServer: v(7)}); e != nil {
+		if e = d.CreateBackend(haproxy.Backend{Name: f.Backend, Servers: servers, TimeoutConnect: v(4), TimeoutServer: v(6)}); e != nil {
 			return e
 		}
 		e = d.CreateFrontend(f)
@@ -352,8 +348,8 @@ func (m *Model) candidate() error {
 		if err != nil {
 			return err
 		}
-		old.TimeoutConnect = v(5)
-		old.TimeoutServer = v(7)
+		old.TimeoutConnect = v(4)
+		old.TimeoutServer = v(6)
 		if e = d.UpdateBackend(f.Backend, old); e != nil {
 			return e
 		}
@@ -400,13 +396,6 @@ func (m *Model) candidate() error {
 	m.pending = d
 	m.preview("Изменение порта может нарушить внешние приложения. Общий backend затрагивает все его frontend. Приоритет backups: один primary, без allbackups; иначе балансировка.\n"+m.connectionWarning(f.Backend)+diff(m.s.Document.Bytes(), d.Bytes()), func() tea.Msg {
 		m.s.Document = d
-		if m.cfg.Names == nil {
-			m.cfg.Names = map[string]string{}
-		}
-		m.cfg.Names[f.Name] = v(0)
-		if err := m.cfg.Save(m.settingsPath); err != nil {
-			return result{err: err}
-		}
 		return result{text: "Изменения в памяти. S — сохранить после проверки HAProxy."}
 	})
 	return nil
@@ -744,13 +733,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-func nodeLabel(s settings.Settings, name string) string {
-	if label := s.Names[name]; label != "" {
-		return label + " / " + name
-	}
-	return name
-}
-
 func (m Model) connectionWarning(backend string) string {
 	if len(m.stats) == 0 {
 		return "Активные соединения: UNKNOWN (Runtime API недоступен).\n"

@@ -9,7 +9,6 @@ import (
 )
 
 type Settings struct {
-	Names   map[string]string `toml:"node_names"`
 	General struct {
 		ConfigPath string `toml:"config_path"`
 		BackupDir  string `toml:"backup_dir"`
@@ -57,7 +56,6 @@ type Settings struct {
 
 func Default() Settings {
 	var s Settings
-	s.Names = map[string]string{}
 	s.General.ConfigPath = "/opt/haproxy/haproxy.cfg"
 	s.General.BackupDir = "/opt/haproxy/backups"
 	s.General.AutoBackup = true

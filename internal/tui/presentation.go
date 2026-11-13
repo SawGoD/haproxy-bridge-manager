@@ -113,7 +113,7 @@ func (m Model) routesView() string {
 	}
 	w := max(16, m.width-4)
 	nameWidth := max(12, min(24, w-42))
-	b.WriteString(muted.Render(fmt.Sprintf("  %-*s %-7s %-16s %s", nameWidth, "Нода / frontend", "Порт", "Активный сервер", "Статус")) + "\n")
+	b.WriteString(muted.Render(fmt.Sprintf("  %-*s %-7s %-16s %s", nameWidth, "Frontend", "Порт", "Активный сервер", "Статус")) + "\n")
 	limit := max(2, m.height-16)
 	if search != "" {
 		limit--
@@ -132,7 +132,7 @@ func (m Model) routesView() string {
 				}
 			}
 		}
-		line := fmt.Sprintf("  %-*s %-7d %-16s %s", nameWidth, short(nodeLabel(m.cfg, f.Name), nameWidth), f.Bind.Port, short(monitor.Active(m.stats, f.Backend), 16), status)
+		line := fmt.Sprintf("  %-*s %-7d %-16s %s", nameWidth, short(f.Name, nameWidth), f.Bind.Port, short(monitor.Active(m.stats, f.Backend), 16), status)
 		if i == m.cursor {
 			line = selected.Width(w).Render("› " + strings.TrimPrefix(line, "  "))
 		} else {
@@ -169,7 +169,7 @@ func (m Model) routesView() string {
 	return m.screen("Маршруты", state, b.String(), help)
 }
 func (m Model) nodeView() string {
-	labels := []string{"Название ноды", "Frontend", "Backend", "Адрес прослушивания", "Локальный порт", "Connect timeout", "Client timeout", "Server timeout"}
+	labels := []string{"Frontend", "Backend", "Адрес прослушивания", "Локальный порт", "Connect timeout", "Client timeout", "Server timeout"}
 	var b strings.Builder
 	start := max(0, m.focus-max(3, m.height-14)+1)
 	end := min(len(m.fields), start+max(3, m.height-14))
