@@ -15,7 +15,6 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"net"
 	"os"
 	"path/filepath"
@@ -25,9 +24,12 @@ import (
 )
 
 type result struct {
-	err  error
-	text string
-	open bool
+	err          error
+	text         string
+	open         bool
+	serverData   *string
+	returnMode   string
+	settingsData *settings.Settings
 }
 type statsMsg struct {
 	servers []monitor.Server
@@ -35,26 +37,32 @@ type statsMsg struct {
 }
 type tick time.Time
 type Model struct {
-	s                     *app.Session
-	cfg                   settings.Settings
-	settingsPath          string
-	mode, notice, filter  string
-	cursor, width, height int
-	fields                []textinput.Model
-	focus                 int
-	area                  textarea.Model
-	view                  viewport.Model
-	pending               *haproxy.Document
-	action                func() tea.Msg
-	busy                  bool
-	stats                 []monitor.Server
-	checked               time.Time
-	backups               []backup.Metadata
-	editing               string
-	search                bool
+	s                        *app.Session
+	cfg                      settings.Settings
+	settingsPath             string
+	mode, notice, filter     string
+	cursor, width, height    int
+	fields                   []textinput.Model
+	focus                    int
+	area                     textarea.Model
+	view                     viewport.Model
+	pending                  *haproxy.Document
+	action                   func() tea.Msg
+	busy                     bool
+	stats                    []monitor.Server
+	checked                  time.Time
+	backups                  []backup.Metadata
+	editing                  string
+	search                   bool
+	prefs                    []preference
+	prefIndex, prefGroup     int
+	serverFields             []textinput.Model
+	serverIndex, serverFocus int
+	serverNew                bool
+	confirmReturn            string
 }
 
-func New(p string) Model {
+func newLegacy(p string) Model {
 	m := Model{settingsPath: p, width: 100, height: 30}
 	m.view = viewport.New(90, 20)
 	m.area = textarea.New()
@@ -121,17 +129,35 @@ func diff(a, b []byte) string {
 	if string(a) == string(b) {
 		return "Изменений нет"
 	}
+	old, new := strings.Split(strings.TrimSuffix(string(a), "\n"), "\n"), strings.Split(strings.TrimSuffix(string(b), "\n"), "\n")
+	prefix := 0
+	for prefix < len(old) && prefix < len(new) && old[prefix] == new[prefix] {
+		prefix++
+	}
+	suffix := 0
+	for suffix < len(old)-prefix && suffix < len(new)-prefix && old[len(old)-1-suffix] == new[len(new)-1-suffix] {
+		suffix++
+	}
+	start := max(0, prefix-3)
+	oldEnd, newEnd := len(old)-max(0, suffix-3), len(new)-max(0, suffix-3)
 	var out strings.Builder
-	out.WriteString("--- current\n+++ candidate\n@@ whole document @@\n")
-	for _, l := range strings.Split(string(a), "\n") {
+	fmt.Fprintf(&out, "--- Текущая конфигурация\n+++ Изменения\n@@ -%d,%d +%d,%d @@\n", start+1, oldEnd-start, start+1, newEnd-start)
+	for _, l := range old[start:prefix] {
+		out.WriteString(" " + l + "\n")
+	}
+	for _, l := range old[prefix : len(old)-suffix] {
 		out.WriteString("-" + l + "\n")
 	}
-	for _, l := range strings.Split(string(b), "\n") {
+	for _, l := range new[prefix : len(new)-suffix] {
 		out.WriteString("+" + l + "\n")
+	}
+	for _, l := range new[len(new)-suffix : newEnd] {
+		out.WriteString(" " + l + "\n")
 	}
 	return out.String()
 }
 func (m *Model) preview(text string, action func() tea.Msg) {
+	m.confirmReturn = "main"
 	m.view.SetContent(text)
 	m.view.GotoTop()
 	m.mode = "confirm"
@@ -386,17 +412,31 @@ func (m *Model) candidate() error {
 	return nil
 }
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.formUpdate(msg); handled {
+		return next, cmd
+	}
 	switch x := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = x.Width
 		m.height = x.Height
 		m.view.Width = max(20, x.Width-4)
-		m.view.Height = max(5, x.Height-8)
+		m.view.Height = max(3, x.Height-11)
 		m.area.SetWidth(max(20, x.Width-8))
 		m.area.SetHeight(max(5, x.Height-16))
 		return m, nil
 	case result:
 		m.busy = false
+		if x.settingsData != nil && x.err == nil {
+			m.cfg = *x.settingsData
+		}
+		if x.serverData != nil {
+			m.area.SetValue(*x.serverData)
+		}
+		if x.returnMode != "" {
+			m.mode = x.returnMode
+			m.notice = x.text
+			return m, nil
+		}
 		m.notice = x.text
 		if x.err != nil {
 			m.notice = x.err.Error()
@@ -440,43 +480,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key == "ctrl+c" {
 			return m, tea.Quit
 		}
-		if m.mode == "wizard" || m.mode == "settings" {
-			if key == "esc" {
-				if m.s == nil {
-					return m, tea.Quit
-				}
-				m.mode = "main"
-				return m, nil
-			}
-			if key == "ctrl+s" {
-				s, e := settings.Parse(m.area.Value())
-				if e == nil && m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
-					m.preview("Сохранение настроек перечитает файл и отменит несохранённые изменения.\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg { err := s.Save(m.settingsPath); return result{err: err, open: true} })
-					return m, nil
-				}
-				if e == nil {
-					e = s.Save(m.settingsPath)
-				}
-				if e != nil {
-					m.notice = e.Error()
-					return m, nil
-				}
-				m.cfg = s
-				m.open()
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.area, cmd = m.area.Update(msg)
-			return m, cmd
-		}
 		if m.mode == "missing" {
 			if key == "q" || key == "esc" {
 				return m, tea.Quit
 			}
 			if key == "o" {
 				m.mode = "settings"
-				m.area.SetValue(m.cfg.String())
-				m.area.Focus()
+				m.beginPreferences(false)
 				return m, nil
 			}
 			if key == "c" {
@@ -505,43 +515,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if key == "o" {
 				m.mode = "settings"
-				m.area.SetValue(m.cfg.String())
-				m.area.Focus()
+				m.beginPreferences(false)
 			}
 			return m, nil
-		}
-		if m.mode == "editor" {
-			if key == "esc" {
-				m.mode = "main"
-				return m, nil
-			}
-			if key == "ctrl+s" {
-				if e := m.candidate(); e != nil {
-					m.notice = e.Error()
-				}
-				return m, nil
-			}
-			if key == "tab" {
-				if m.focus < len(m.fields) {
-					m.fields[m.focus].Blur()
-				} else {
-					m.area.Blur()
-				}
-				m.focus = (m.focus + 1) % (len(m.fields) + 1)
-				if m.focus < len(m.fields) {
-					m.fields[m.focus].Focus()
-				} else {
-					m.area.Focus()
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			if m.focus < len(m.fields) {
-				m.fields[m.focus], cmd = m.fields[m.focus].Update(msg)
-			} else {
-				m.area, cmd = m.area.Update(msg)
-			}
-			return m, cmd
 		}
 		if m.mode == "confirm" {
 			if key == "y" {
@@ -549,6 +525,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.action
 			}
 			if key == "n" || key == "esc" {
+				if m.confirmReturn == "servers" {
+					m.mode = "servers"
+					return m, nil
+				}
 				if m.s == nil {
 					m.mode = "missing"
 				} else {
@@ -616,6 +596,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 		switch key {
+		case "enter":
+			m.editor(false)
+		case "?":
+			m.mode = "view"
+			m.view.SetContent("Действия\n\nA / E / D   Добавить / изменить / удалить ноду\nT / H       Проверить TCP / TLS\nV           Проверить конфигурацию HAProxy\nS / P / X   Сохранить / применить / сохранить и применить\nB / M       Резервные копии / создать копию\nO / L / G   Настройки / журнал / логи Docker\nI           Статистика Runtime API\nR           Перечитать файл с диска\n/           Поиск\nQ           Выход")
+			m.view.GotoTop()
 		case "q":
 			return m, tea.Quit
 		case "j", "down":
@@ -630,8 +616,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.editor(false)
 		case "o":
 			m.mode = "settings"
-			m.area.SetValue(m.cfg.String())
-			m.area.Focus()
+			m.beginPreferences(false)
 		case "d":
 			if len(rows) > 0 {
 				f := rows[m.cursor]
@@ -759,97 +744,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	return m, nil
 }
-func (m Model) View() string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")).Render("HAProxy Bridge Manager")
-	if m.busy {
-		return title + "\nВыполняется операция…\n" + m.notice
-	}
-	switch m.mode {
-	case "wizard", "settings":
-		return title + "\nSettings / TOML — Ctrl+S сохранить, Esc назад\n" + m.area.View() + "\n" + m.notice
-	case "missing":
-		return title + "\n" + m.notice + "\n[C] Создать новый минимальный файл  [O] Settings  [Q] Quit"
-	case "error":
-		return title + "\n" + m.notice + "\n[O] Settings [Q] Quit"
-	case "editor":
-		var b strings.Builder
-		b.WriteString(title + "\nNode editor — Tab: следующее поле, Ctrl+S: preview, Esc: отмена\n")
-		for _, f := range m.fields {
-			b.WriteString(f.View() + "\n")
-		}
-		b.WriteString("Servers: name endpoint primary|backup weight check|nocheck enabled|disabled interval fall rise\n")
-		b.WriteString(m.area.View() + "\n" + m.notice)
-		return b.String()
-	case "confirm":
-		return title + "\n" + m.view.View() + "\n[Y] Подтвердить [N/Esc] Отмена; ↑↓ прокрутка"
-	case "view":
-		return title + "\n" + m.view.View() + "\nEsc — назад"
-	case "backups":
-		var b strings.Builder
-		b.WriteString(title + "\nBackups — Enter/R: diff и Restore; Esc: назад\n")
-		for i := max(0, m.cursor-max(1, m.height-8)+1); i < len(m.backups) && i < max(0, m.cursor-max(1, m.height-8)+1)+max(1, m.height-8); i++ {
-			x := m.backups[i]
-			mark := "  "
-			if i == m.cursor {
-				mark = "> "
-			}
-			b.WriteString(fmt.Sprintf("%s%s  %d bytes SHA256 %s pinned=%v good=%v\n", mark, x.ID, x.Size, x.SHA256, x.Pinned, x.Good))
-		}
-		return b.String()
-	}
-	host, _ := os.Hostname()
-	var b strings.Builder
-	b.WriteString(title + "\nHost: " + host + "   Search: " + m.filter + "\n")
-	compact := m.width < 125
-	if compact {
-		b.WriteString("NODE / FRONTEND    PORT   ACTIVE           STATUS   CONNS  CHECKED\n")
-	} else {
-		b.WriteString("NODE / FRONTEND                      PORT   BACKEND           ACTIVE           STATUS   CONNS  CHECKED\n")
-	}
-	rows := m.rows()
-	start := max(0, m.cursor-max(1, m.height-12)+1)
-	end := min(len(rows), start+max(1, m.height-12))
-	for i := start; i < end; i++ {
-		f := rows[i]
-		status := "UNKNOWN"
-		var current int64
-		for _, s := range m.stats {
-			if s.Backend == f.Backend {
-				if status == "UNKNOWN" {
-					status = s.Status
-				} else if status != s.Status {
-					status = "MIXED"
-				}
-				current += s.Current
-			}
-		}
-		mark := " "
-		if i == m.cursor {
-			mark = ">"
-		}
-		when := "—"
-		if !m.checked.IsZero() {
-			when = m.checked.Format("15:04:05")
-		}
-		connections := "—"
-		if status != "UNKNOWN" {
-			connections = strconv.FormatInt(current, 10)
-		}
-		if compact {
-			b.WriteString(fmt.Sprintf("%s%-17s %-6d %-16s %-8s %-6s %s\n", mark, short(nodeLabel(m.cfg, f.Name), 17), f.Bind.Port, short(monitor.Active(m.stats, f.Backend), 16), short(status, 8), connections, when))
-		} else {
-			b.WriteString(fmt.Sprintf("%s%-35s %-6d %-17s %-16s %-8s %-6s %s\n", mark, nodeLabel(m.cfg, f.Name), f.Bind.Port, f.Backend, monitor.Active(m.stats, f.Backend), status, connections, when))
-		}
-	}
-	if compact && len(rows) > 0 {
-		f := rows[min(m.cursor, len(rows)-1)]
-		b.WriteString(fmt.Sprintf("Bind: %s:%d  Backend: %s\n", f.Bind.Address, f.Bind.Port, f.Backend))
-	}
-	b.WriteString("\n[A] Add [E] Edit [D] Delete [/] Search [T] TCP [H] TLS [V] Validate\n[S] Save [P] Apply [X] Save&Apply [B] Backups [M] Backup [O] Settings\n[L] Logs [G] Docker logs [I] Runtime details [R] Reload [Q] Quit  ↑↓/j/k\n")
-	b.WriteString(m.notice)
-	return lipgloss.NewStyle().MaxWidth(max(20, m.width)).Render(b.String())
-}
-
 func nodeLabel(s settings.Settings, name string) string {
 	if label := s.Names[name]; label != "" {
 		return label + " / " + name
