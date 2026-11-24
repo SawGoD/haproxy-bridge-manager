@@ -107,9 +107,29 @@ func (m *Model) movePref(delta int) {
 			pos = i
 		}
 	}
+	m.selectPreference(ids[(pos+delta+len(ids))%len(ids)])
+}
+
+func (m *Model) selectPreference(index int) {
 	m.prefs[m.prefIndex].input.Blur()
-	m.prefIndex = ids[(pos+delta+len(ids))%len(ids)]
-	m.prefs[m.prefIndex].input.Focus()
+	m.prefIndex = index
+	m.prefs[index].input.Focus()
+}
+
+func (m *Model) openDockerApplyPreferences() {
+	m.beginPreferences(false)
+	for index, group := range m.preferenceGroups() {
+		if group != sectionNames["Docker"] {
+			continue
+		}
+		m.prefGroup = index
+		for _, field := range m.groupFields() {
+			if m.prefs[field].label == fieldNames["ApplyMethod"] {
+				m.selectPreference(field)
+				return
+			}
+		}
+	}
 }
 func (m *Model) savePreferences() error {
 	next := m.cfg
@@ -136,6 +156,18 @@ func (m *Model) savePreferences() error {
 	}
 	if e := next.Validate(); e != nil {
 		return e
+	}
+	if m.s != nil && next.Docker.ApplyMethod != m.cfg.Docker.ApplyMethod {
+		methodOnly := m.cfg
+		methodOnly.Docker.ApplyMethod = next.Docker.ApplyMethod
+		if methodOnly == next {
+			if err := next.Save(m.settingsPath); err != nil {
+				return err
+			}
+			m.cfg, m.s.Settings = next, next
+			m.mode, m.notice = "main", ""
+			return nil
+		}
 	}
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
 		m.preview("Настройки изменены. Перечитать файл и отменить несохранённые изменения маршрутов?\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
@@ -307,21 +339,20 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 				m.notice = e.Error()
 			}
 			return m, nil, true
-		case "tab", "down":
+		case "down":
 			m.movePref(1)
 			return m, nil, true
-		case "shift+tab", "up":
+		case "up":
 			m.movePref(-1)
 			return m, nil, true
-		case "ctrl+left", "ctrl+right":
+		case "tab", "shift+tab", "ctrl+left", "ctrl+right":
 			delta := 1
-			if k == "ctrl+left" {
+			if k == "shift+tab" || k == "ctrl+left" {
 				delta = -1
 			}
-			m.prefs[m.prefIndex].input.Blur()
-			m.prefGroup = (m.prefGroup + delta + len(m.preferenceGroups())) % len(m.preferenceGroups())
-			m.prefIndex = m.groupFields()[0]
-			m.prefs[m.prefIndex].input.Focus()
+			groups := len(m.preferenceGroups())
+			m.prefGroup = (m.prefGroup + delta + groups) % groups
+			m.selectPreference(m.groupFields()[0])
 			return m, nil, true
 		case " ", "enter":
 			p := &m.prefs[m.prefIndex]

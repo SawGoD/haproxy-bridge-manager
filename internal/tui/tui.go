@@ -178,10 +178,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		if errors.Is(x.err, platform.ErrRecreateRequired) {
 			m.notice = "O → Docker → Способ применения: recreate"
-			m.view.SetContent("Применение остановлено.\n\nВ Docker смонтирован отдельный haproxy.cfg.\nДля нового файла нужен recreate.\n\nO → Docker → «Способ применения»\nВыберите recreate и сохраните настройки.\nЗатем повторите действие.")
+			m.view.SetContent("Применение остановлено.\n\nВ Docker смонтирован отдельный haproxy.cfg.\nДля нового файла нужен recreate.\n\nНажмите o, чтобы открыть нужную настройку.\nПробел переключает способ, Ctrl+S сохраняет.")
 			m.view.GotoTop()
 			m.view.SetXOffset(0)
-			m.mode = "view"
+			m.mode = "apply-help"
 			return m, nil
 		}
 		if x.settingsData != nil && x.err == nil {
@@ -289,7 +289,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view, cmd = m.view.Update(msg)
 			return m, cmd
 		}
-		if m.mode == "view" {
+		if m.mode == "view" || m.mode == "apply-help" {
+			if m.mode == "apply-help" && key == "o" {
+				m.openDockerApplyPreferences()
+				return m, nil
+			}
 			if key == "esc" {
 				m.mode = "main"
 				return m, nil

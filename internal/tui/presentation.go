@@ -70,6 +70,8 @@ func (m Model) View() string {
 		return m.screen("Подтверждение", "Проверьте изменения перед продолжением", m.view.View(), hint("Y", "подтвердить")+"   "+hint("Q / Esc / N", "отмена")+"\n"+hint("↑↓ ←→", "прокрутка"))
 	case "view":
 		return m.screen("Подробности", "Диагностика и журнал", m.view.View(), hint("Esc", "назад")+"   "+hint("↑↓ ←→", "прокрутка"))
+	case "apply-help":
+		return m.screen("Применение", "Docker", m.view.View(), hint("O", "способ применения")+"   "+hint("Esc", "назад"))
 	case "missing":
 		return m.screen("Файл не найден", m.cfg.General.ConfigPath, "\nКонфигурация HAProxy отсутствует.\n\nУкажите существующий файл в настройках\nили явно создайте новый минимальный конфиг.", hint("O", "настройки")+"    "+hint("C", "создать файл")+"    "+hint("Q", "выход"))
 	case "error":
@@ -352,10 +354,12 @@ func (m Model) preferencesView() string {
 		p := m.prefs[id]
 		if len(preferenceOptions(p)) > 0 {
 			value := displayChoice(p.input.Value())
+			prefix := "  "
 			if id == m.prefIndex {
+				prefix = "› "
 				value = accent.Render("‹ " + value + " ›")
 			}
-			b.WriteString(fmt.Sprintf("  %-23s %s\n", p.label, value))
+			b.WriteString(fmt.Sprintf("%s%-23s %s\n", prefix, p.label, value))
 		} else {
 			b.WriteString(fieldRow(p.label, p.input, id == m.prefIndex, m.width-4) + "\n")
 		}
@@ -365,5 +369,5 @@ func (m Model) preferencesView() string {
 	if m.mode == "wizard" {
 		title = "Первый запуск"
 	}
-	return m.screen(title, "Параметры сохраняются между запусками", b.String(), hint("Ctrl+←→", "раздел")+"   "+hint("Tab / ↑↓", "поле")+"\n"+hint("Пробел", "выбор")+"   "+hint("Ctrl+S", "записать")+"   "+hint("Esc", "назад"))
+	return m.screen(title, "Параметры сохраняются между запусками", b.String(), hint("Tab / Shift+Tab", "раздел")+"   "+hint("↑↓", "поле")+"\n"+hint("Пробел", "выбор")+"   "+hint("Ctrl+S", "записать")+"   "+hint("Esc", "назад"))
 }

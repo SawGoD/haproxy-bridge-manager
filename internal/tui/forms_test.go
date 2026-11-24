@@ -2,6 +2,7 @@ package tui
 
 import (
 	"github.com/SawGoD/haproxy-bridge/internal/monitor"
+	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -43,6 +44,49 @@ func TestStructuredSettingsAndCancel(t *testing.T) {
 	m = press(m, tea.KeyMsg{Type: tea.KeyEsc})
 	if m.cfg.General.ConfigPath != original || m.mode != "main" {
 		t.Fatal("cancel changed settings")
+	}
+}
+
+func TestPreferenceSectionsUseTab(t *testing.T) {
+	m := sampleModel(t)
+	m.beginPreferences(false)
+	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.prefs[m.prefIndex].section != "Docker" || m.prefs[m.prefIndex].label != "Имя контейнера" {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
+	if m.prefs[m.prefIndex].label != "Файл Compose" {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyShiftTab})
+	if m.prefs[m.prefIndex].section != "HAProxy" {
+		t.Fatal(m.View())
+	}
+}
+
+func TestApplyHelpOpensMethodAndPreservesRouteDraft(t *testing.T) {
+	m := sampleModel(t)
+	if err := m.s.Document.DeleteFrontend("de1_in"); err != nil {
+		t.Fatal(err)
+	}
+	draft := m.s.Document.Bytes()
+	next, _ := m.Update(result{err: platform.ErrRecreateRequired})
+	m = next.(Model)
+	if m.mode != "apply-help" || !strings.Contains(m.View(), "Нажмите o") {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'o'}})
+	p := m.prefs[m.prefIndex]
+	if m.mode != "settings" || p.section != "Docker" || p.label != "Способ применения" || p.input.Value() != "restart" {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
+	m = press(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	cfg, err := settings.Load(m.settingsPath)
+	if err != nil || cfg.Docker.ApplyMethod != "recreate" || m.s.Settings.Docker.ApplyMethod != "recreate" ||
+		m.mode != "main" || !slices.Equal(draft, m.s.Document.Bytes()) {
+		t.Fatalf("settings or draft lost: %v, mode=%s, Apply=%s", err, m.mode, cfg.Docker.ApplyMethod)
 	}
 }
 func TestServerFormAndConfirmedDelete(t *testing.T) {
