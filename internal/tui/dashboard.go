@@ -85,7 +85,7 @@ func framedRows(title string, rows []string, width, height int) string {
 func (m Model) useDashboard() bool { return m.width >= 100 && m.height >= 26 }
 
 func dashboardKeys(width int) []string {
-	actions := [][2]string{{"A", "Добавить"}, {"E", "Изменить"}, {"D", "Удалить"}, {"T", "Тест"}, {"V", "Проверить"},
+	actions := [][2]string{{"A", "Добавить"}, {"D", "Удалить"}, {"T", "Проверка и тест"},
 		{"S", "Сохранить"}, {"P", "Применить"}, {"B", "Бэкапы"}, {"O", "Настройки"}, {"Q", "Выход"}}
 	keys := make([]string, 0, len(actions))
 	for _, action := range actions {
@@ -128,7 +128,7 @@ func (m Model) dashboardDetailWidth(width, listWidth int) int {
 }
 
 func (m Model) dashboardNavigation() []string {
-	items := []string{dashboardSelection.Render("› Маршруты"), hint("F2", "Серверы"), hint("V", "Проверка"),
+	items := []string{dashboardSelection.Render("› Маршруты"), hint("F2", "Серверы"),
 		hint("B", "Бэкапы")}
 	if m.cfg.HAProxy.Mode == "docker" {
 		items = append(items, hint("G", "Контейнер"))

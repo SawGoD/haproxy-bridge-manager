@@ -22,7 +22,7 @@ func (m Model) updateBackups(key string) (tea.Model, tea.Cmd) {
 		m.backupIndex = min(m.backupIndex+1, max(0, len(m.backups)-1))
 	case "k", "up":
 		m.backupIndex = max(0, m.backupIndex-1)
-	case "enter", "v":
+	case "enter":
 		if len(m.backups) > 0 {
 			item := m.backups[m.backupIndex]
 			data, err := m.s.Backups.Content(item.ID)

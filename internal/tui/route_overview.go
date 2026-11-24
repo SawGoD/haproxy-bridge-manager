@@ -35,13 +35,12 @@ func (m *Model) previewApply(save bool) {
 }
 
 func (m Model) startRouteProbe(route haproxy.Frontend, tls bool) (tea.Model, tea.Cmd) {
-	backend, err := m.s.Document.Backend(route.Backend)
-	if err != nil {
-		m.notice = err.Error()
-		return m, nil
+	var next tea.Cmd
+	if backend, err := m.s.Document.Backend(route.Backend); err == nil && len(backend.Servers) > 0 {
+		next = m.probeCmd(route, backend.Servers, tls)
 	}
 	m.busy = true
-	return m, m.probeCmd(route, backend.Servers, tls, m.mode)
+	return m, m.validateCmd(next)
 }
 
 func (m Model) updateOverview(key string) (tea.Model, tea.Cmd) {
@@ -71,7 +70,7 @@ func (m Model) updateOverview(key string) (tea.Model, tea.Cmd) {
 		} else {
 			m.overviewOffset = min(len(m.overviewRows(route, backend, m.overviewWidth()))-1, max(0, m.overviewOffset+delta))
 		}
-	case "e", "enter":
+	case "enter":
 		m.openRoute(editRoute)
 		if m.mode == "editor" {
 			m.editBack = "overview"
@@ -113,7 +112,7 @@ func sectionRows(names []string, index int, wide bool) []string {
 func (m Model) overviewView() string {
 	routes := m.rows()
 	help := hint("Tab", "разделы") + "   " + hint("↑↓", "выбор") + "   " + hint("Q / Esc", "назад") + "\n" +
-		hint("E / Enter", "изменить") + "   " + hint("T / H", "проверка")
+		hint("Enter", "изменить") + "   " + hint("T / H", "проверить и тестировать")
 	if len(routes) == 0 {
 		return m.screen("Маршрут", "", "Маршрут недоступен", help)
 	}

@@ -97,7 +97,6 @@ func TestCopyRouteOffersFreePortAndKeepsIndependentBackend(t *testing.T) {
 	}
 	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
 	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
-	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.copySource != "de1_in" || m.fields[routePortField].Value() != "10448" || len(m.servers) != 2 {
 		t.Fatal(m.View())

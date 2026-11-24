@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"errors"
 	"github.com/SawGoD/haproxy-bridge/internal/monitor"
 	"github.com/SawGoD/haproxy-bridge/internal/platform"
@@ -218,9 +219,16 @@ func TestActionMenuAndPreviewCancel(t *testing.T) {
 	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
 	want := m.rows()[m.cursor].Name
 	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
-	if m.mode != "actions" || !strings.Contains(m.View(), "Редактировать маршрут") {
+	if m.mode != "actions" || !strings.Contains(m.View(), "Проверка конфига и тест TCP") {
 		t.Fatal(m.View())
 	}
+	for _, action := range m.routeActions(true) {
+		if action.key == "e" || action.key == "v" {
+			t.Fatal("obsolete action", action)
+		}
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyEsc})
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	if m.mode != "editor" || m.editing != want {
 		t.Fatal(m.mode, m.editing)
@@ -249,7 +257,7 @@ func TestEditorNavigationAndExplicitFieldEdit(t *testing.T) {
 		t.Fatal(m.View())
 	}
 	key(tea.KeyShiftTab)
-	letter('e')
+	key(tea.KeyEnter)
 	name := m.fields[0].Value()
 	if m.mode != "editor" || m.fields[0].Focused() || m.fieldEditing {
 		t.Fatal("route opened in input mode")
@@ -262,7 +270,8 @@ func TestEditorNavigationAndExplicitFieldEdit(t *testing.T) {
 	if m.mode != "main" || m.fields[0].Value() != name {
 		t.Fatal("q did not leave the route editor")
 	}
-	letter('e')
+	key(tea.KeyEnter)
+	key(tea.KeyEnter)
 	key(tea.KeyEnter)
 	letter('q')
 	if !m.fieldEditing || m.fields[0].Value() != name+"q" {
@@ -345,5 +354,42 @@ func TestOperationProgressIsHonest(t *testing.T) {
 	failed := ansi.Strip(o.content())
 	if !strings.Contains(failed, "Ошибка   Проверка портов") || !strings.Contains(failed, "порт не ответил") || strings.Contains(failed, o.success) {
 		t.Fatal(failed)
+	}
+}
+
+type routeValidationRunner struct{ err error }
+
+func (r routeValidationRunner) Run(context.Context, string, ...string) ([]byte, error) {
+	return nil, r.err
+}
+
+func TestRouteTestWaitsForValidation(t *testing.T) {
+	for _, validationErr := range []error{nil, errors.New("invalid config")} {
+		m := sampleModel(t)
+		m.mode = "overview"
+		m.s.Settings.HAProxy.Mode = "native"
+		m.s.Runner = routeValidationRunner{validationErr}
+		var tested bool
+		probe := func() tea.Msg {
+			tested = true
+			return probeResult{route: "de1_in", kind: "TCP"}
+		}
+		var next tea.Model = m
+		cmd := m.validateCmd(probe)
+		for cmd != nil {
+			next, cmd = next.Update(cmd())
+		}
+		m = next.(Model)
+		if validationErr != nil {
+			if tested || m.mode != "operation" || !strings.Contains(m.View(), validationErr.Error()) {
+				t.Fatal(m.View())
+			}
+		} else if !tested || m.mode != "probe" || !strings.Contains(m.View(), "Конфигурация корректна") {
+			t.Fatal(m.View())
+		}
+		m = press(m, tea.KeyMsg{Type: tea.KeyEsc})
+		if m.mode != "overview" {
+			t.Fatal(m.mode)
+		}
 	}
 }

@@ -425,7 +425,7 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 			m.mode = "editor"
 		case "a":
 			m.openServer(true)
-		case "e", "enter":
+		case "enter":
 			m.openServer(len(m.servers) == 0)
 		case "j", "down":
 			m.serverIndex = min(m.serverIndex+1, max(0, len(m.servers)-1))

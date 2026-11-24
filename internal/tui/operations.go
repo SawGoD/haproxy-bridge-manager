@@ -18,6 +18,8 @@ type operationStarted struct {
 	title, path, success string
 	started              time.Time
 	events               <-chan tea.Msg
+	back                 string
+	retry, next          tea.Cmd
 }
 
 type operationStep string
@@ -35,12 +37,16 @@ func followOperation(events <-chan tea.Msg) tea.Cmd {
 	return func() tea.Msg { return <-events }
 }
 
-func (m Model) validateCmd() tea.Cmd {
-	return func() tea.Msg {
-		return startOperation("Проверка конфигурации", m.s.Path, "Конфигурация корректна", func(step func(string)) error {
+func (m Model) validateCmd(next tea.Cmd) tea.Cmd {
+	var retry tea.Cmd
+	retry = func() tea.Msg {
+		op := startOperation("Проверка конфигурации", m.s.Path, "Конфигурация корректна", func(step func(string)) error {
 			return m.s.ValidateWithProgress(m.s.Document.Bytes(), step)
 		})
+		op.back, op.next, op.retry = m.mode, next, retry
+		return op
 	}
+	return retry
 }
 
 func startOperation(title, path, success string, run func(func(string)) error) operationStarted {
@@ -51,7 +57,7 @@ func startOperation(title, path, success string, run func(func(string)) error) o
 		events <- operationFinished{err}
 		close(events)
 	}()
-	return operationStarted{title, path, success, started, events}
+	return operationStarted{title: title, path: path, success: success, started: started, events: events, back: "main"}
 }
 
 func startApply(s *app.Session, save bool) operationStarted {
@@ -109,16 +115,18 @@ func (m Model) operationView() string {
 		return m.screen(m.operation.title, m.operation.path, m.operation.content(), hint("", "Дождитесь завершения"))
 	}
 	help := hint("↑↓ ←→", "прокрутка") + "   " + hint("Q / Esc", "назад")
-	if m.operation.success == "Конфигурация корректна" {
-		help += "\n" + hint("R", "повторить") + "   " + hint("P", "применить")
+	if m.operation.retry != nil {
+		help += "\n" + hint("R", "повторить")
+		if m.operation.err == nil {
+			help += "   " + hint("P", "применить")
+		}
 	}
 	return m.screen(m.operation.title, m.operation.path, m.view.View(), help)
 }
 
 type probeResult struct {
-	route, kind, back string
-	checks            []serverProbe
-	command           tea.Cmd
+	route, kind string
+	checks      []serverProbe
 }
 
 type serverProbe struct {
@@ -126,13 +134,12 @@ type serverProbe struct {
 	network.Result
 }
 
-func (m Model) probeCmd(route haproxy.Frontend, servers []haproxy.Server, tls bool, back string) tea.Cmd {
+func (m Model) probeCmd(route haproxy.Frontend, servers []haproxy.Server, tls bool) tea.Cmd {
 	kind := "TCP"
 	if tls {
 		kind = "TLS"
 	}
-	var cmd tea.Cmd
-	cmd = func() tea.Msg {
+	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(m.cfg.Network.ConnectTimeout)*time.Second)
 		defer cancel()
 		checks := make([]serverProbe, len(servers))
@@ -147,9 +154,8 @@ func (m Model) probeCmd(route haproxy.Frontend, servers []haproxy.Server, tls bo
 		for range servers {
 			<-done
 		}
-		return probeResult{route.Name, kind, back, checks, cmd}
+		return probeResult{route.Name, kind, checks}
 	}
-	return cmd
 }
 
 func (p probeResult) content() string {
@@ -186,5 +192,7 @@ func (p probeResult) content() string {
 	if passed != len(p.checks) || passed == 0 {
 		style = statusWarning
 	}
-	return style.Bold(true).Padding(0, 1).Render(fmt.Sprintf("Проверка завершена · %d / %d успешно", passed, len(p.checks))) + "\n\n" + strings.Join(rows, "\n")
+	return statusUp.Render("Конфигурация корректна") + "\n" +
+		style.Bold(true).Padding(0, 1).Render(fmt.Sprintf("Тест маршрута · %d / %d успешно", passed, len(p.checks))) +
+		"\n\n" + strings.Join(rows, "\n")
 }

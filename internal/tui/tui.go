@@ -189,6 +189,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.operation.steps = append(m.operation.steps, string(x))
 		return m, followOperation(m.operation.events)
 	case operationFinished:
+		if x.err == nil && m.operation.next != nil {
+			m.operation.steps = append(m.operation.steps, "Тест серверов маршрута")
+			return m, m.operation.next
+		}
 		m.busy = false
 		if errors.Is(x.err, platform.ErrRecreateRequired) {
 			return m.Update(result{err: x.err})
@@ -350,13 +354,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = "backups"
 				m.previewRestore()
 				return m, nil
-			case m.mode == "probe" && key == "r":
+			case (m.mode == "probe" || m.mode == "operation") && m.operation.retry != nil && key == "r":
 				m.busy = true
-				return m, m.probe.command
-			case m.mode == "operation" && m.operation.success == "Конфигурация корректна" && key == "r":
-				m.busy = true
-				return m, m.validateCmd()
-			case m.mode == "operation" && m.operation.success == "Конфигурация корректна" && key == "p":
+				return m, m.operation.retry
+			case m.mode == "operation" && m.operation.retry != nil && m.operation.err == nil && key == "p":
 				m.mode = "main"
 				m.previewApply(false)
 				return m, nil
@@ -364,8 +365,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				switch m.mode {
 				case "backup-preview":
 					m.mode = "backups"
-				case "probe":
-					m.mode = m.probe.back
+				case "probe", "operation":
+					m.mode = m.operation.back
 				default:
 					m.mode = "main"
 				}
@@ -449,8 +450,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.search = true
 		case "a":
 			m.openRoute(newRoute)
-		case "e":
-			m.openRoute(editRoute)
 		case "c":
 			m.openRoute(copyRoute)
 		case "o":
@@ -476,9 +475,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		case "p", "x":
 			m.previewApply(key == "x")
-		case "v":
-			m.busy = true
-			return m, m.validateCmd()
 		case "r":
 			m.preview("Перечитать файл с диска? Несохранённые изменения будут потеряны.", func() tea.Msg { return result{err: m.s.Reload(), text: "Файл перечитан"} })
 		case "b":
@@ -551,6 +547,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(rows) > 0 {
 				return m.startRouteProbe(rows[m.cursor], key == "h")
 			}
+			m.busy = true
+			return m, m.validateCmd(nil)
 		}
 		return m, nil
 	}

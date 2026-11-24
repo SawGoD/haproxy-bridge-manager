@@ -107,11 +107,13 @@ type routeAction struct {
 func (m Model) routeActions(hasRoute bool) []routeAction {
 	actions := []routeAction{{"a", "Добавить маршрут"}}
 	if hasRoute {
-		actions = []routeAction{{"e", "Редактировать маршрут"}, {"c", "Создать на основании"}, {"a", "Добавить маршрут"},
-			{"t", "Проверить TCP"}, {"h", "Проверить TLS"}, {"i", "Статистика Runtime API"}, {"d", "Удалить маршрут"}}
+		actions = []routeAction{{"c", "Создать на основании"}, {"a", "Добавить маршрут"},
+			{"t", "Проверка конфига и тест TCP"}, {"h", "Проверка конфига и тест TLS"}, {"i", "Статистика Runtime API"}, {"d", "Удалить маршрут"}}
+	} else {
+		actions = append(actions, routeAction{"t", "Проверить конфигурацию"})
 	}
 	actions = append(actions, routeAction{"/", "Найти маршрут"},
-		routeAction{"v", "Проверить конфигурацию"}, routeAction{"s", "Сохранить в файл"},
+		routeAction{"s", "Сохранить в файл"},
 		routeAction{"p", "Применить сохранённое"}, routeAction{"x", "Сохранить и применить"},
 		routeAction{"b", "Открыть резервные копии"}, routeAction{"m", "Создать резервную копию"},
 		routeAction{"r", "Перечитать файл"}, routeAction{"o", "Настройки"}, routeAction{"l", "Журнал действий"})
@@ -153,7 +155,7 @@ func (m Model) routesView() string {
 		state = "Не сохранено  •  " + state
 	}
 	help := hint("↑↓", "маршрут") + "   " + hint("Enter", "обзор") + "   " + hint("Pg↑↓", "детали") + "\n" +
-		hint("Enter", "открыть") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
+		hint("T", "проверка и тест") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
 		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("Q", "выход")
 	w := m.width - 4
 	var search string
