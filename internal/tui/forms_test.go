@@ -77,12 +77,14 @@ func TestServerFormAndConfirmedDelete(t *testing.T) {
 	}
 }
 func TestLayoutSizes(t *testing.T) {
-	for _, size := range [][2]int{{80, 24}, {120, 36}} {
+	for _, size := range [][2]int{{48, 16}, {80, 24}, {120, 36}} {
 		m := sampleModel(t)
 		n, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = n.(Model)
-		for _, mode := range []string{"main", "editor", "servers", "serverform", "settings", "wizard"} {
+		for _, mode := range []string{"main", "actions", "editor", "servers", "serverform", "settings", "wizard"} {
 			switch mode {
+			case "actions":
+				m = press(m, tea.KeyMsg{Type: tea.KeyTab})
 			case "editor":
 				m.editor(false)
 			case "servers":
@@ -109,6 +111,29 @@ func TestLayoutSizes(t *testing.T) {
 				t.Fatal("status hidden")
 			}
 		}
+	}
+}
+
+func TestActionMenuAndPreviewCancel(t *testing.T) {
+	m := sampleModel(t)
+	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
+	want := m.rows()[m.cursor].Name
+	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+	if m.mode != "actions" || !strings.Contains(m.View(), "Редактировать маршрут") {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != "editor" || m.editing != want {
+		t.Fatal(m.mode, m.editing)
+	}
+	m.fields[5].SetValue("1m")
+	m = press(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.mode != "confirm" {
+		t.Fatal(m.mode, m.notice)
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyEsc})
+	if m.mode != "editor" || m.fields[5].Value() != "1m" {
+		t.Fatal("cancel lost the editor draft")
 	}
 }
 func TestDiffShowsOnlyChangeContext(t *testing.T) {

@@ -352,7 +352,6 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 					data := strings.Join(remaining, "\n")
 					return result{serverData: &data, returnMode: "servers", text: "Сервер удалён из кандидата"}
 				})
-				m.confirmReturn = "servers"
 			}
 		}
 		return m, nil, true

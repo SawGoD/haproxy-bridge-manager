@@ -42,6 +42,7 @@ type Model struct {
 	settingsPath             string
 	mode, notice, filter     string
 	cursor, width, height    int
+	menuIndex, backupIndex   int
 	fields                   []textinput.Model
 	focus                    int
 	area                     textarea.Model
@@ -64,7 +65,8 @@ type Model struct {
 
 func newLegacy(p string) Model {
 	m := Model{settingsPath: p, width: 100, height: 30}
-	m.view = viewport.New(90, 20)
+	m.view = viewport.New(m.width-4, m.height-9)
+	m.view.SetHorizontalStep(8)
 	m.area = textarea.New()
 	m.area.CharLimit = 0
 	m.area.SetWidth(90)
@@ -157,9 +159,10 @@ func diff(a, b []byte) string {
 	return out.String()
 }
 func (m *Model) preview(text string, action func() tea.Msg) {
-	m.confirmReturn = "main"
+	m.confirmReturn = m.mode
 	m.view.SetContent(text)
 	m.view.GotoTop()
+	m.view.SetXOffset(0)
 	m.mode = "confirm"
 	m.action = action
 }
@@ -409,7 +412,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = x.Width
 		m.height = x.Height
 		m.view.Width = max(20, x.Width-4)
-		m.view.Height = max(3, x.Height-11)
+		m.view.Height = max(3, x.Height-9)
 		m.area.SetWidth(max(20, x.Width-8))
 		m.area.SetHeight(max(5, x.Height-16))
 		return m, nil
@@ -420,6 +423,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if x.serverData != nil {
 			m.area.SetValue(*x.serverData)
+			m.serverIndex = min(m.serverIndex, max(0, len(m.serverLines())-1))
 		}
 		if x.returnMode != "" {
 			m.mode = x.returnMode
@@ -514,15 +518,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.action
 			}
 			if key == "n" || key == "esc" {
-				if m.confirmReturn == "servers" {
-					m.mode = "servers"
-					return m, nil
-				}
-				if m.s == nil {
-					m.mode = "missing"
-				} else {
-					m.mode = "main"
-				}
+				m.mode = m.confirmReturn
+				m.action = nil
 				return m, nil
 			}
 			var cmd tea.Cmd
@@ -544,13 +541,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if key == "j" || key == "down" {
-				m.cursor = min(m.cursor+1, len(m.backups)-1)
+				m.backupIndex = min(m.backupIndex+1, max(0, len(m.backups)-1))
 			}
 			if key == "k" || key == "up" {
-				m.cursor = max(0, m.cursor-1)
+				m.backupIndex = max(0, m.backupIndex-1)
 			}
 			if len(m.backups) > 0 && (key == "enter" || key == "r") {
-				id := m.backups[m.cursor].ID
+				id := m.backups[m.backupIndex].ID
 				b, e := m.s.Backups.Content(id)
 				if e != nil {
 					m.notice = e.Error()
@@ -565,6 +562,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.search {
 			if key == "esc" || key == "enter" {
 				m.search = false
+				if key == "esc" {
+					m.filter = ""
+				}
 				return m, nil
 			}
 			if key == "backspace" {
@@ -579,6 +579,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		rows := m.rows()
+		if m.mode == "actions" {
+			actions := m.routeActions(len(rows) > 0)
+			switch key {
+			case "esc", "?":
+				m.mode = "main"
+				return m, nil
+			case "down", "j":
+				m.menuIndex = min(m.menuIndex+1, len(actions)-1)
+				return m, nil
+			case "up", "k":
+				m.menuIndex = max(0, m.menuIndex-1)
+				return m, nil
+			case "enter":
+				key = actions[m.menuIndex].key
+				m.mode = "main"
+			default:
+				return m, nil
+			}
+		}
 		if len(rows) > 0 {
 			m.cursor = min(max(0, m.cursor), len(rows)-1)
 		} else {
@@ -587,10 +606,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "enter":
 			m.editor(false)
-		case "?":
-			m.mode = "view"
-			m.view.SetContent("Действия\n\nA / E / D   Добавить / изменить / удалить ноду\nT / H       Проверить TCP / TLS\nV           Проверить конфигурацию HAProxy\nS / P / X   Сохранить / применить / сохранить и применить\nB / M       Резервные копии / создать копию\nO / L / G   Настройки / журнал / логи Docker\nI           Статистика Runtime API\nR           Перечитать файл с диска\n/           Поиск\nQ           Выход")
-			m.view.GotoTop()
+		case "?", "tab":
+			m.mode = "actions"
+			m.menuIndex = 0
+		case "esc":
+			if m.filter != "" {
+				m.filter = ""
+				m.cursor = 0
+			}
 		case "q":
 			return m, tea.Quit
 		case "j", "down":
@@ -621,7 +644,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 		case "s":
-			m.preview(diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
+			m.preview("Сохранить изменения в файл?\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
 				return result{err: m.s.Save(), text: "Сохранено после валидации; Apply отдельно"}
 			})
 		case "p":
@@ -648,7 +671,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.notice = e.Error()
 			} else {
 				m.backups = list
-				m.cursor = 0
+				m.backupIndex = 0
 				m.mode = "backups"
 			}
 		case "m":
