@@ -1,6 +1,6 @@
 BINARY := haproxy-bridge
 VERSION ?= dev
-.PHONY: build test integration release
+.PHONY: build test integration release lab
 build:
 	go build -trimpath -ldflags '-X main.version=$(VERSION)' -o bin/$(BINARY) ./cmd/haproxy-bridge
 test:
@@ -8,6 +8,8 @@ test:
 	go vet ./...
 integration:
 	HAPROXY_BRIDGE_INTEGRATION=1 go test -count=1 -v ./integration
+lab: build
+	python3 lab/run.py
 release:
 	mkdir -p dist
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w -X main.version=$(VERSION)' -o dist/$(BINARY)-linux-amd64 ./cmd/haproxy-bridge

@@ -1,0 +1,41 @@
+name: haproxy-bridge-lab
+
+services:
+  haproxy:
+    image: haproxy@sha256:1242e4006ac3f1ed15871efadca3d8d089e76f720017a1c51747133ee40cc953
+    container_name: haproxy-bridge-lab
+    command: [haproxy, -W, -db, -f, /usr/local/etc/haproxy/haproxy.cfg]
+    volumes:
+      - ./.state/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "127.0.0.1:10443-10455:10443-10455"
+      - "127.0.0.1:19490:19490"
+    networks:
+      lab:
+
+  primary: &backend
+    image: nginx:1.28-alpine
+    entrypoint: [/bin/sh, -ec]
+    command:
+      - |
+        printf '%s\n' "$$BACKEND_ROLE" > /usr/share/nginx/html/index.html
+        exec nginx -g 'daemon off;'
+    environment:
+      BACKEND_ROLE: primary
+    networks:
+      lab:
+        ipv4_address: 172.30.214.10
+
+  backup:
+    <<: *backend
+    environment:
+      BACKEND_ROLE: backup
+    networks:
+      lab:
+        ipv4_address: 172.30.214.11
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.30.214.0/24
