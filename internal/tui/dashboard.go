@@ -97,7 +97,7 @@ func dashboardKeys(width int) []string {
 		middle := len(keys) / 2
 		rows = []string{strings.Join(keys[:middle], sep), strings.Join(keys[middle:], sep)}
 	}
-	return append(rows, hint("↑↓", "маршрут")+"   "+hint("Pg↑↓", "детали")+"   "+hint("I", "подробнее")+"   "+hint("C", "копия")+"   "+hint("/", "поиск")+"   "+hint("Tab", "меню"))
+	return append(rows, hint("↑↓", "маршрут")+"   "+hint("Enter", "обзор")+"   "+hint("Pg↑↓", "детали")+"   "+hint("I", "статистика")+"   "+hint("C", "копия")+"   "+hint("/", "поиск")+"   "+hint("Tab", "меню"))
 }
 
 func (m Model) dashboardDimensions() (width, height, listWidth int, footer []string) {
@@ -106,12 +106,39 @@ func (m Model) dashboardDimensions() (width, height, listWidth int, footer []str
 	if m.notice != "" {
 		footer = append([]string{warning.Render(oneLine(m.notice))}, footer...)
 	}
-	return width, m.height - len(footer) - 7, width * 35 / 100, footer
+	height = m.height - len(footer) - 7
+	if m.sidebarWidth() == 0 {
+		height--
+	}
+	return width, height, (width - m.sidebarWidth()) * 35 / 100, footer
+}
+
+func (m Model) sidebarWidth() int {
+	if m.width >= 144 {
+		return 23
+	}
+	return 0
+}
+
+func (m Model) dashboardDetailWidth(width, listWidth int) int {
+	if sidebar := m.sidebarWidth(); sidebar > 0 {
+		width -= sidebar + 1
+	}
+	return width - listWidth - 1
+}
+
+func (m Model) dashboardNavigation() []string {
+	items := []string{dashboardSelection.Render("› Маршруты"), hint("F2", "Серверы"), hint("V", "Проверка"),
+		hint("B", "Бэкапы")}
+	if m.cfg.HAProxy.Mode == "docker" {
+		items = append(items, hint("G", "Контейнер"))
+	}
+	return append(items, hint("O", "Настройки"), hint("L", "Журнал"))
 }
 
 func (m Model) dashboardView(rows []haproxy.Frontend) string {
 	width, height, listWidth, footer := m.dashboardDimensions()
-	detailWidth := width - listWidth - 1
+	detailWidth := m.dashboardDetailWidth(width, listWidth)
 	up, reserve, down, unknown := 0, 0, 0, 0
 	for _, route := range rows {
 		backend := m.stats.Backends[route.Backend]
@@ -147,12 +174,20 @@ func (m Model) dashboardView(rows []haproxy.Frontend) string {
 	if len(rows) == 0 {
 		label = "Нет маршрутов"
 	}
-	meta := statusUnknown.Padding(0, 1).Render(m.cfg.HAProxy.Mode) + "  " + statusUnknown.Padding(0, 1).Render(fmt.Sprintf("%d маршрутов", len(rows))) + "  " + style.Bold(true).Padding(0, 1).Render(label)
+	mode := m.cfg.HAProxy.Mode
+	if mode == "docker" && m.cfg.Docker.ContainerName != "" {
+		mode += ": " + short(m.cfg.Docker.ContainerName, 22)
+	}
+	meta := statusUnknown.Padding(0, 1).Render(mode) + "  " + statusUnknown.Padding(0, 1).Render(fmt.Sprintf("%d маршрутов", len(rows))) + "  " + style.Bold(true).Padding(0, 1).Render(label)
 	title := accent.Bold(true).Render("HAProxy Bridge") + muted.Render("  /  ") + normal.Bold(true).Render("Маршруты")
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
 		title += warning.Render("  •  Не сохранено")
 	}
-	header := framedRows("", []string{cell(title, width-4-ansi.StringWidth(meta)) + meta}, width, 3)
+	headerRows := []string{cell(title, max(1, width-4-ansi.StringWidth(meta))) + meta}
+	if m.sidebarWidth() == 0 {
+		headerRows = append(headerRows, strings.Join(m.dashboardNavigation(), "   "))
+	}
+	header := framedRows("", headerRows, width, len(headerRows)+2)
 	var list []string
 	var search string
 	if m.search {
@@ -193,6 +228,13 @@ func (m Model) dashboardView(rows []haproxy.Frontend) string {
 		list = append(list, "Маршрутов нет. A — добавить маршрут.")
 	}
 	columns := lipgloss.JoinHorizontal(lipgloss.Top, framedRows("Маршруты", list, listWidth, height), " ", framedRows(rightTitle, details, detailWidth, height))
+	if sidebar := m.sidebarWidth(); sidebar > 0 {
+		rows := m.dashboardNavigation()
+		if m.cfg.HAProxy.Mode == "docker" {
+			rows = append(rows, "", accent.Render("Docker"), m.cfg.Docker.ContainerName, "Apply: "+m.cfg.Docker.ApplyMethod)
+		}
+		columns = lipgloss.JoinHorizontal(lipgloss.Top, framedRows("Разделы", rows, sidebar, height), " ", columns)
+	}
 	return header + "\n\n" + columns + "\n\n" + framedRows("", footer, width, len(footer)+2)
 }
 
@@ -205,7 +247,7 @@ func (m Model) dashboardDetails(route haproxy.Frontend, width int) []string {
 	}
 	overview := []string{
 		accent.Bold(true).Render(route.Backend) + "  " + statusBadge(status) + muted.Render("  │  ") + stateTime,
-		m.routeSessionLine(servers),
+		m.routeSessionLine(backend, servers),
 	}
 	entry := "Вход: " + routeEndpoint(route)
 	if backend.Downtime != nil {

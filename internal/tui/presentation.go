@@ -6,7 +6,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 	"net"
-	"strconv"
 	"strings"
 )
 
@@ -31,6 +30,9 @@ func (m Model) screen(title, subtitle, body, help string) string {
 	lines = append(lines, status)
 	lines = append(lines, muted.Render(strings.Repeat("─", w)))
 	lines = append(lines, footer...)
+	if m.width >= 86 {
+		return framedRows("", lines, m.width, m.height)
+	}
 	for i, l := range lines {
 		lines[i] = "  " + ansi.Truncate(l, w, "")
 	}
@@ -54,6 +56,9 @@ func (m Model) View() string {
 	if m.width < 48 || m.height < 16 {
 		return "HAProxy Bridge\nУвеличьте терминал до 48×16 или больше.\nCtrl+C — выход"
 	}
+	if m.mode == "operation" {
+		return m.operationView()
+	}
 	if m.busy {
 		return m.screen("Выполняется операция", "HAProxy • конфигурация и управление", "\n"+accent.Render("  ◌  Проверка и выполнение…"), muted.Render("Дождитесь завершения операции"))
 	}
@@ -62,6 +67,8 @@ func (m Model) View() string {
 		return m.preferencesView()
 	case "actions":
 		return m.actionsView()
+	case "overview":
+		return m.overviewView()
 	case "editor", "servers":
 		return m.routeEditorView()
 	case "serverform":
@@ -69,7 +76,18 @@ func (m Model) View() string {
 	case "confirm":
 		return m.screen("Подтверждение", "Проверьте изменения перед продолжением", m.view.View(), hint("Y", "подтвердить")+"   "+hint("Q / Esc / N", "отмена")+"\n"+hint("↑↓ ←→", "прокрутка"))
 	case "view":
-		return m.screen("Подробности", "Диагностика и журнал", m.view.View(), hint("Esc", "назад")+"   "+hint("↑↓ ←→", "прокрутка"))
+		title := m.viewTitle
+		if title == "" {
+			title = "Подробности"
+		}
+		return m.screen(title, "", m.view.View(), hint("Q / Esc", "назад")+"   "+hint("↑↓ ←→", "прокрутка"))
+	case "probe":
+		return m.screen("Проверка маршрута", m.probe.route+" · "+m.probe.kind, m.view.View(),
+			hint("R", "повторить")+"   "+hint("Q / Esc", "назад")+"\n"+hint("↑↓ ←→", "прокрутка"))
+	case "backup-preview":
+		item := m.backups[m.backupIndex]
+		return m.screen("Просмотр бэкапа", item.ID, m.view.View(),
+			hint("R", "восстановить")+"   "+hint("Q / Esc", "назад")+"\n"+hint("↑↓ ←→", "прокрутка"))
 	case "apply-help":
 		return m.screen("Применение", "Docker", m.view.View(), hint("O", "способ применения")+"   "+hint("Esc", "назад"))
 	case "missing":
@@ -77,27 +95,7 @@ func (m Model) View() string {
 	case "error":
 		return m.screen("Не удалось открыть файл", m.cfg.General.ConfigPath, "\nПроверьте путь, права доступа и формат конфигурации.", hint("O", "настройки")+"    "+hint("Q", "выход"))
 	case "backups":
-		var b strings.Builder
-		b.WriteString(muted.Render("  Дата и время           Размер      Статус") + "\n")
-		start := max(0, m.backupIndex-max(1, m.height-12)+1)
-		for i := start; i < len(m.backups) && i < start+max(1, m.height-12); i++ {
-			x := m.backups[i]
-			state := "обычная"
-			if x.Good {
-				state = "проверена"
-			} else if x.Pinned {
-				state = "закреплена"
-			}
-			line := fmt.Sprintf("  %-21s %-11s %s", x.CreatedAt.Local().Format("02.01.2006 15:04:05"), fmt.Sprintf("%d байт", x.Size), state)
-			if i == m.backupIndex {
-				line = selected.Render("› " + strings.TrimPrefix(line, "  "))
-			}
-			b.WriteString(line + "\n")
-		}
-		if len(m.backups) == 0 {
-			b.WriteString("\nРезервных копий пока нет. M на главном экране создаст первую.")
-		}
-		return m.screen("Резервные копии", m.cfg.General.BackupDir, b.String(), hint("Enter", "diff и восстановление")+"    "+hint("↑↓", "выбор")+"    "+hint("Esc", "назад"))
+		return m.backupsView()
 	}
 	return m.routesView()
 }
@@ -118,7 +116,7 @@ func (m Model) routeActions(hasRoute bool) []routeAction {
 		routeAction{"b", "Открыть резервные копии"}, routeAction{"m", "Создать резервную копию"},
 		routeAction{"r", "Перечитать файл"}, routeAction{"o", "Настройки"}, routeAction{"l", "Журнал действий"})
 	if m.cfg.HAProxy.Mode == "docker" {
-		actions = append(actions, routeAction{"g", "Логи Docker"})
+		actions = append(actions, routeAction{"g", "Контейнер Docker и логи"})
 	}
 	return append(actions, routeAction{"q", "Выйти"})
 }
@@ -154,8 +152,8 @@ func (m Model) routesView() string {
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
 		state = "Не сохранено  •  " + state
 	}
-	help := hint("↑↓", "маршрут") + "   " + hint("Pg↑↓", "детали") + "   " + hint("I", "подробнее") + "\n" +
-		hint("Enter", "править") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
+	help := hint("↑↓", "маршрут") + "   " + hint("Enter", "обзор") + "   " + hint("Pg↑↓", "детали") + "\n" +
+		hint("Enter", "открыть") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
 		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("Q", "выход")
 	w := m.width - 4
 	var search string
@@ -235,7 +233,7 @@ func (m Model) routeEditorView() string {
 	if m.copySource != "" {
 		title, subtitle = "Копия маршрута", m.copySource+" → "+m.fields[0].Value()
 	} else if m.editing != "" {
-		title = "Маршрут"
+		title = "Редактор маршрута"
 	}
 	endpoint := m.fields[2].Value()
 	if port := m.fields[routePortField].Value(); endpoint != "" && port != "" {
@@ -275,32 +273,13 @@ func (m Model) routeEditorView() string {
 	}
 
 	help = hint("↑↓", "выбор") + "   " + hint("Enter", "открыть") + "   " + hint("Tab", "маршрут") + "\n" +
-		hint("A", "добавить") + "   " + hint("D", "удалить") + "   " + hint("Ctrl+↑↓", "порядок") + "\n" +
-		hint("S", "предпросмотр") + "   " + hint("Q / Esc", "назад")
-	if len(m.servers) == 0 {
-		rows = append(rows, "  Серверов пока нет. A — добавить.")
-	}
-	nameWidth := min(22, width/3-2)
-	addressWidth := min(40, width-nameWidth-14)
-	start := max(0, m.serverIndex-(m.height-11)+1)
-	for i := start; i < min(len(m.servers), start+m.height-11); i++ {
-		server := m.servers[i]
-		role := "основной"
-		if server.Disabled {
-			role = "выключен"
-		} else if server.Backup {
-			role = "резервный"
-		}
-		address := net.JoinHostPort(server.Address, strconv.Itoa(server.Port))
-		if len(address) > addressWidth {
-			port := ":" + strconv.Itoa(server.Port)
-			address = short(strings.TrimSuffix(address, port), addressWidth-len(port)) + port
-		}
-		row := fmt.Sprintf("  %-*s %-*s %s", nameWidth, short(server.Name, nameWidth), addressWidth, address, role)
-		if i == m.serverIndex {
-			row = selected.Render("› " + row[2:])
-		}
-		rows = append(rows, row)
+		hint("A", "добавить") + "   " + hint("D", "удалить") + "   " + hint("[ ]", "порядок") + "\n" +
+		hint("Space", "вкл/выкл") + "   " + hint("S", "diff") + "   " + hint("Q / Esc", "назад")
+	table := m.serverTable(m.servers, m.fields[1].Value(), m.serverIndex, width)
+	start := max(1, m.serverIndex-(m.height-12)+2)
+	if len(table) > 0 {
+		rows = append(rows, table[0])
+		rows = append(rows, table[min(start, len(table)):min(len(table), start+m.height-12)]...)
 	}
 	return m.screen(title, subtitle, strings.Join(rows, "\n"), help)
 }
@@ -310,24 +289,34 @@ func (m Model) serverFormView() string {
 	if m.serverNew {
 		title = "Новый сервер"
 	}
-	help := hint("↑↓", "выбор") + "   " + hint("Enter", "изменить") + "\n" +
+	help := hint("↑↓", "поле") + "   " + hint("Enter", "изменить") + "   " + hint("Tab", "разделы") + "\n" +
 		hint("S", "в черновик") + "   " + hint("Q / Esc", "назад")
 	if m.fieldEditing {
 		title = "Ввод · " + serverLabels[m.serverFocus]
 		help = hint("Enter", "готово") + "   " + hint("Esc", "отменить ввод")
 	}
-	limit := m.height - strings.Count(help, "\n") - 8
-	start := max(0, m.serverFocus-limit+1)
+	group := serverSection(m.serverFocus)
+	wide := m.width >= 86
+	width := m.overviewWidth()
+	sections := sectionRows(serverSectionNames, group, wide)
 	var rows []string
-	for i := start; i < min(len(m.serverFields), start+limit); i++ {
+	for _, i := range serverFieldGroups[group] {
 		field := m.serverFields[i]
 		current := i == m.serverFocus
 		if i == serverRoleField || i == serverHealthField || i == serverStateField {
 			field.SetValue(displayChoice(field.Value()))
 		}
-		rows = append(rows, editorValueRow(serverLabels[i], field, current, current && m.fieldEditing, m.width-4))
+		rows = append(rows, editorValueRow(serverLabels[i], field, current, current && m.fieldEditing, width))
 	}
-	return m.screen(title, m.fields[0].Value()+" / "+m.serverFields[0].Value(), strings.Join(rows, "\n"), help)
+	var body string
+	if wide {
+		height := m.height - strings.Count(help, "\n") - 8
+		body = lipgloss.JoinHorizontal(lipgloss.Top, framedRows("Разделы", sections, 20, height), " ",
+			framedRows(serverSectionNames[group], rows, width+4, height))
+	} else {
+		body = strings.Join(append(sections, rows...), "\n")
+	}
+	return m.screen(title, m.fields[0].Value()+" / "+m.serverFields[0].Value(), body, help)
 }
 func displayChoice(s string) string {
 	if v := map[string]string{"primary": "Основной", "backup": "Резервный", "check": "Включён", "nocheck": "Выключен", "inherit": "Наследовать", "enabled": "Включён", "disabled": "Выключен", "true": "Да", "false": "Нет"}[s]; v != "" {

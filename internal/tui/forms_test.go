@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"github.com/SawGoD/haproxy-bridge/internal/monitor"
 	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
@@ -123,14 +124,17 @@ func TestServerFormAndConfirmedDelete(t *testing.T) {
 	}
 }
 func TestLayoutSizes(t *testing.T) {
-	for _, size := range [][2]int{{48, 16}, {80, 24}, {120, 36}} {
+	for _, size := range [][2]int{{48, 16}, {80, 24}, {120, 36}, {150, 38}} {
 		m := sampleModel(t)
 		n, _ := m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 		m = n.(Model)
-		for _, mode := range []string{"main", "actions", "editor", "servers", "serverform", "settings", "wizard"} {
+		for _, mode := range []string{"main", "actions", "overview", "editor", "servers", "serverform", "backups", "settings", "wizard"} {
 			switch mode {
 			case "actions":
 				m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+			case "overview":
+				m.mode = "main"
+				m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 			case "editor":
 				m.openRoute(editRoute)
 			case "servers":
@@ -138,6 +142,8 @@ func TestLayoutSizes(t *testing.T) {
 			case "serverform":
 				m.serverIndex = 0
 				m.openServer(false)
+			case "backups":
+				m.mode = "backups"
 			case "settings":
 				m.beginPreferences(false)
 			case "wizard":
@@ -174,6 +180,7 @@ usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
 	}
 	next, _ := m.Update(statsMsg{snapshot: snapshot, path: m.cfg.Monitoring.Socket})
 	m = next.(Model)
+	m.width, m.height = 120, 36
 	view := ansi.Strip(m.View())
 	for _, part := range []string{"UP · резерв", "Обслуживают: reserve", "основной", "резервный", "DOWN", "Аптайм: 1m30s", "Простой backend: 12s", "Сессии: 0 сейчас / 5 всего", "L4CON · 14 мс", "Connection refused"} {
 		if !strings.Contains(view, part) {
@@ -184,6 +191,13 @@ usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
 		if strings.Contains(line, "› de1_in") && !strings.Contains(line, "10443  UP · резерв") {
 			t.Fatal(line)
 		}
+	}
+	idle := []monitor.Server{{Name: "primary"}, {Name: "reserve", Backup: true}}
+	if got := m.routeSessionLine(snapshot.Backends["de1_out"], idle); got != "Нет сессий · доступен резервный" {
+		t.Fatal(got)
+	}
+	if got := m.routeSessionLine(monitor.Backend{Status: "UP", ServerCountsKnown: true, Primary: 1}, idle); got != "Нет сессий · доступен основной" {
+		t.Fatal(got)
 	}
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
 	m = next.(Model)
@@ -230,15 +244,28 @@ func TestEditorNavigationAndExplicitFieldEdit(t *testing.T) {
 	key := func(keyType tea.KeyType) { m = press(m, tea.KeyMsg{Type: keyType}) }
 	letter := func(r rune) { m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
 	key(tea.KeyEnter)
+	if m.mode != "overview" || !strings.Contains(m.View(), "Общее") {
+		t.Fatal(m.View())
+	}
+	key(tea.KeyTab)
+	if m.overviewTab != 1 || !strings.Contains(m.View(), "de1-public") {
+		t.Fatal(m.View())
+	}
+	key(tea.KeyShiftTab)
+	letter('e')
 	name := m.fields[0].Value()
 	if m.mode != "editor" || m.fields[0].Focused() || m.fieldEditing {
 		t.Fatal("route opened in input mode")
 	}
 	letter('q')
+	if m.mode != "overview" {
+		t.Fatal(m.mode)
+	}
+	letter('q')
 	if m.mode != "main" || m.fields[0].Value() != name {
 		t.Fatal("q did not leave the route editor")
 	}
-	key(tea.KeyEnter)
+	letter('e')
 	key(tea.KeyEnter)
 	letter('q')
 	if !m.fieldEditing || m.fields[0].Value() != name+"q" {
@@ -287,5 +314,39 @@ func TestDiffShowsOnlyChangeContext(t *testing.T) {
 	got := diff([]byte(old), []byte(next))
 	if !strings.Contains(got, "-old\n+new") || strings.Count(got, "unchanged") > 3 {
 		t.Fatal(got)
+	}
+}
+
+func TestBackupPreviewSeparatesRestore(t *testing.T) {
+	m := sampleModel(t)
+	if _, err := m.s.Backups.Create(m.s.Path); err != nil {
+		t.Fatal(err)
+	}
+	key := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	m = press(m, key('b'))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.mode != "backup-preview" || m.action != nil {
+		t.Fatal("preview unexpectedly armed restore")
+	}
+	m = press(m, key('r'))
+	if m.mode != "confirm" || !strings.Contains(m.View(), "Восстановление из бэкапа") {
+		t.Fatal(m.View())
+	}
+	m = press(m, key('q'))
+	if m.mode != "backups" || m.action != nil {
+		t.Fatal("cancel did not return to backups")
+	}
+}
+
+func TestOperationProgressIsHonest(t *testing.T) {
+	o := operationState{operationStarted: operationStarted{success: "Конфигурация применена"}, steps: []string{"Валидация", "Проверка портов"}}
+	pending := ansi.Strip(o.content())
+	if !strings.Contains(pending, "OK   Валидация") || !strings.Contains(pending, "В работе   Проверка портов") {
+		t.Fatal(pending)
+	}
+	o.done, o.err = true, errors.New("порт не ответил")
+	failed := ansi.Strip(o.content())
+	if !strings.Contains(failed, "Ошибка   Проверка портов") || !strings.Contains(failed, "порт не ответил") || strings.Contains(failed, o.success) {
+		t.Fatal(failed)
 	}
 }

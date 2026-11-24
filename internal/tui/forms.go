@@ -303,6 +303,17 @@ const (
 )
 
 var serverLabels = []string{"Имя сервера", "Адрес", "Порт", "Роль", "Вес", "Health check", "Состояние", "Интервал", "Fall", "Rise"}
+var serverSectionNames = []string{"Общее", "Health check", "Дополнительно"}
+var serverFieldGroups = [][]int{{0, 1, 2, serverRoleField, serverStateField}, {serverHealthField, 7, 8, 9}, {4}}
+
+func serverSection(field int) int {
+	for i, fields := range serverFieldGroups {
+		if slices.Contains(fields, field) {
+			return i
+		}
+	}
+	return 0
+}
 
 func cycle(value string, values ...string) string {
 	for i, v := range values {
@@ -389,7 +400,10 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 	if m.mode == "editor" {
 		switch k {
 		case "q", "esc":
-			m.mode = "main"
+			m.mode = m.editBack
+			if m.mode == "" {
+				m.mode = "main"
+			}
 			m.notice = ""
 			return m, nil, true
 		case "f2", "tab", "shift+tab", "right":
@@ -417,14 +431,18 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 			m.serverIndex = min(m.serverIndex+1, max(0, len(m.servers)-1))
 		case "k", "up":
 			m.serverIndex = max(0, m.serverIndex-1)
-		case "ctrl+up", "ctrl+down":
+		case "[", "]", "ctrl+up", "ctrl+down":
 			other := m.serverIndex + 1
-			if k == "ctrl+up" {
+			if k == "[" || k == "ctrl+up" {
 				other = m.serverIndex - 1
 			}
 			if other >= 0 && other < len(m.servers) {
 				m.servers[other], m.servers[m.serverIndex] = m.servers[m.serverIndex], m.servers[other]
 				m.serverIndex = other
+			}
+		case " ":
+			if len(m.servers) > 0 {
+				m.servers[m.serverIndex].Disabled = !m.servers[m.serverIndex].Disabled
 			}
 		case "d":
 			if len(m.servers) > 0 {
@@ -454,10 +472,20 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 				m.notice = e.Error()
 			}
 			return m, nil, true
-		case "tab", "down", "j":
-			m.serverFocus = min(m.serverFocus+1, len(m.serverFields)-1)
-		case "shift+tab", "up", "k":
-			m.serverFocus = max(0, m.serverFocus-1)
+		case "tab", "shift+tab":
+			delta := 1
+			if k == "shift+tab" {
+				delta = -1
+			}
+			sections := len(serverFieldGroups)
+			m.serverFocus = serverFieldGroups[(serverSection(m.serverFocus)+sections+delta)%sections][0]
+		case "down", "j", "up", "k":
+			delta := 1
+			if k == "up" || k == "k" {
+				delta = -1
+			}
+			fields := serverFieldGroups[serverSection(m.serverFocus)]
+			m.serverFocus = fields[min(len(fields)-1, max(0, slices.Index(fields, m.serverFocus)+delta))]
 		case " ", "enter":
 			switch m.serverFocus {
 			case serverRoleField:

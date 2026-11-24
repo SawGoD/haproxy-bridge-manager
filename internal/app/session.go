@@ -46,6 +46,11 @@ func (s *Session) docker() platform.Docker {
 	return platform.Docker{Runner: s.Runner, ContainerName: s.Settings.Docker.ContainerName, ComposeFile: s.Settings.Docker.ComposeFile, ServiceName: s.Settings.Docker.ServiceName}
 }
 func (s *Session) Validate(b []byte) error {
+	return s.ValidateWithProgress(b, func(string) {})
+}
+
+func (s *Session) ValidateWithProgress(b []byte, step func(string)) error {
+	step("Структура, адреса и связи маршрутов")
 	d, e := haproxy.Parse(b)
 	if e != nil {
 		return e
@@ -53,6 +58,7 @@ func (s *Session) Validate(b []byte) error {
 	if e = d.Validate(); e != nil {
 		return e
 	}
+	step("Проверка haproxy -c")
 	f, e := os.CreateTemp(filepath.Dir(s.Path), ".hbm-validate-*")
 	if e != nil {
 		return e
@@ -122,6 +128,11 @@ func (s *Session) CheckApplyMethod() error {
 }
 
 func (s *Session) Apply() error {
+	return s.ApplyWithProgress(func(string) {})
+}
+
+func (s *Session) ApplyWithProgress(step func(string)) error {
+	step("Проверка сохранённого файла и способа применения")
 	b, h, e := storage.Read(s.Path)
 	if e != nil {
 		return e
@@ -135,16 +146,18 @@ func (s *Session) Apply() error {
 	if e = s.CheckApplyMethod(); e != nil {
 		return e
 	}
-	if e = s.Validate(b); e != nil {
+	if e = s.ValidateWithProgress(b, step); e != nil {
 		return e
 	}
 	if s.Settings.HAProxy.Mode == "native" {
+		step("Проверка команды запуска systemd")
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.Settings.HAProxy.ValidationTimeout)*time.Second)
 		defer cancel()
 		if e = (platform.Native{Runner: s.Runner, Binary: s.Settings.Native.Binary, Service: s.Settings.Native.ServiceName}).CheckServiceConfig(ctx, s.Path); e != nil {
 			return e
 		}
 	}
+	step("Резервная копия сохранённого файла")
 	if _, e = s.Backups.Create(s.Path); e != nil {
 		return e
 	}
@@ -153,6 +166,7 @@ func (s *Session) Apply() error {
 		method = s.Settings.Native.ApplyMethod
 	}
 	if method == "manual" {
+		step("Ручное применение")
 		return errors.New("manual: file saved, configuration NOT applied")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -163,11 +177,13 @@ func (s *Session) Apply() error {
 		}
 		return (platform.Native{Runner: s.Runner, Binary: s.Settings.Native.Binary, Service: s.Settings.Native.ServiceName}).Apply(ctx, method)
 	}
+	step("Применение · " + method)
 	e = apply()
 	if errors.Is(e, platform.ErrRecreateRequired) {
 		return e
 	}
 	if e == nil {
+		step("Проверка портов frontend")
 		e = s.checkListeners(ctx)
 	}
 	if e != nil {
@@ -190,6 +206,7 @@ func (s *Session) Apply() error {
 		s.Log("rollback", "success")
 		return fmt.Errorf("apply failed: %w; previous verified configuration restored", e)
 	}
+	step("Запись подтверждённой точки восстановления")
 	m, e := s.Backups.Create(s.Path)
 	if e != nil {
 		return fmt.Errorf("applied but rollback point failed: %w", e)

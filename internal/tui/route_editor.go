@@ -72,6 +72,7 @@ func (m *Model) openRoute(operation routeOperation) {
 	m.fields[0].Placeholder = "имя frontend"
 	m.fields[1].Placeholder = "имя backend"
 	m.focus = 0
+	m.editBack = "main"
 	m.fieldEditing = false
 	m.mode = "editor"
 	m.resizeRouteInputs()

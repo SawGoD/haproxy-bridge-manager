@@ -30,7 +30,7 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 	if backend.LastChange != nil {
 		status += " · " + backend.LastChange.String()
 	}
-	lines := []string{accent.Bold(true).Render(route.Backend) + "  " + status, m.routeSessionLine(servers)}
+	lines := []string{accent.Bold(true).Render(route.Backend) + "  " + status, m.routeSessionLine(backend, servers)}
 	for _, server := range servers {
 		role := "осн."
 		if server.Backup {
@@ -69,7 +69,7 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 	return lines
 }
 
-func (m Model) routeSessionLine(servers []monitor.Server) string {
+func (m Model) routeSessionLine(backend monitor.Backend, servers []monitor.Server) string {
 	switch {
 	case m.cfg.Monitoring.Socket == "":
 		return "Runtime API: сокет не настроен"
@@ -81,10 +81,18 @@ func (m Model) routeSessionLine(servers []monitor.Server) string {
 		return "Runtime API: нет строк серверов"
 	default:
 		active := monitor.Active(servers)
-		if len(active) == 0 {
-			return "Активных сессий нет"
+		if len(active) > 0 {
+			return "Обслуживают: " + strings.Join(active, ", ")
 		}
-		return "Обслуживают: " + strings.Join(active, ", ")
+		if backend.Status == "UP" && backend.ServerCountsKnown {
+			if backend.Primary > 0 {
+				return "Нет сессий · доступен основной"
+			}
+			if backend.OnBackup() {
+				return "Нет сессий · доступен резервный"
+			}
+		}
+		return "Активных сессий нет"
 	}
 }
 

@@ -9,13 +9,11 @@ import (
 	"github.com/SawGoD/haproxy-bridge/internal/backup"
 	"github.com/SawGoD/haproxy-bridge/internal/haproxy"
 	"github.com/SawGoD/haproxy-bridge/internal/monitor"
-	"github.com/SawGoD/haproxy-bridge/internal/network"
 	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -30,6 +28,7 @@ type result struct {
 	serverData   []haproxy.Server
 	returnMode   string
 	settingsData *settings.Settings
+	viewTitle    string
 }
 type statsMsg struct {
 	snapshot monitor.Snapshot
@@ -51,6 +50,13 @@ type Model struct {
 	view                     viewport.Model
 	servers                  []haproxy.Server
 	copySource               string
+	overviewTab              int
+	overviewOffset           int
+	overviewServer           int
+	editBack                 string
+	operation                operationState
+	probe                    probeResult
+	viewTitle                string
 	action                   func() tea.Msg
 	busy                     bool
 	stats                    monitor.Snapshot
@@ -174,6 +180,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.view.Height = max(3, x.Height-9)
 		m.resizeRouteInputs()
 		return m, nil
+	case operationStarted:
+		m.operation = operationState{operationStarted: x}
+		m.mode = "operation"
+		m.notice = ""
+		return m, followOperation(x.events)
+	case operationStep:
+		m.operation.steps = append(m.operation.steps, string(x))
+		return m, followOperation(m.operation.events)
+	case operationFinished:
+		m.busy = false
+		if errors.Is(x.err, platform.ErrRecreateRequired) {
+			return m.Update(result{err: x.err})
+		}
+		m.operation.done, m.operation.err = true, x.err
+		m.operation.elapsed = time.Since(m.operation.started)
+		m.showDetails("operation", m.operation.content())
+		return m, nil
+	case probeResult:
+		m.busy, m.probe = false, x
+		m.notice = ""
+		m.showDetails("probe", x.content())
+		return m, nil
+	case backupsRefreshed:
+		m.busy = false
+		m.mode = "backups"
+		if x.err != nil {
+			m.notice = x.err.Error()
+		} else {
+			m.backups, m.backupIndex = x.list, 0
+			m.notice = "Резервная копия создана"
+		}
+		return m, nil
 	case result:
 		m.busy = false
 		if errors.Is(x.err, platform.ErrRecreateRequired) {
@@ -196,14 +234,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.notice = x.text
 			return m, nil
 		}
+		if x.viewTitle != "" {
+			content := x.text
+			if x.err != nil {
+				content = x.err.Error()
+			}
+			m.notice, m.viewTitle = "", x.viewTitle
+			m.showDetails("view", content)
+			return m, nil
+		}
 		m.notice = x.text
 		if x.err != nil {
 			m.notice = x.err.Error()
 		}
 		if len(m.notice) > 300 {
-			m.view.SetContent(m.notice)
-			m.view.GotoTop()
-			m.mode = "view"
+			m.viewTitle = ""
+			m.showDetails("view", m.notice)
 			return m, nil
 		}
 		if x.open && x.err == nil {
@@ -289,42 +335,45 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.view, cmd = m.view.Update(msg)
 			return m, cmd
 		}
-		if m.mode == "view" || m.mode == "apply-help" {
-			if m.mode == "apply-help" && key == "o" {
+		if m.mode == "overview" {
+			return m.updateOverview(key)
+		}
+		if m.mode == "backups" {
+			return m.updateBackups(key)
+		}
+		if m.mode == "backup-preview" || m.mode == "view" || m.mode == "apply-help" || m.mode == "probe" || m.mode == "operation" {
+			switch {
+			case m.mode == "apply-help" && key == "o":
 				m.openDockerApplyPreferences()
 				return m, nil
-			}
-			if key == "esc" {
+			case m.mode == "backup-preview" && key == "r":
+				m.mode = "backups"
+				m.previewRestore()
+				return m, nil
+			case m.mode == "probe" && key == "r":
+				m.busy = true
+				return m, m.probe.command
+			case m.mode == "operation" && m.operation.success == "Конфигурация корректна" && key == "r":
+				m.busy = true
+				return m, m.validateCmd()
+			case m.mode == "operation" && m.operation.success == "Конфигурация корректна" && key == "p":
 				m.mode = "main"
+				m.previewApply(false)
+				return m, nil
+			case key == "esc" || key == "q":
+				switch m.mode {
+				case "backup-preview":
+					m.mode = "backups"
+				case "probe":
+					m.mode = m.probe.back
+				default:
+					m.mode = "main"
+				}
 				return m, nil
 			}
 			var cmd tea.Cmd
 			m.view, cmd = m.view.Update(msg)
 			return m, cmd
-		}
-		if m.mode == "backups" {
-			if key == "esc" {
-				m.mode = "main"
-				return m, nil
-			}
-			if key == "j" || key == "down" {
-				m.backupIndex = min(m.backupIndex+1, max(0, len(m.backups)-1))
-			}
-			if key == "k" || key == "up" {
-				m.backupIndex = max(0, m.backupIndex-1)
-			}
-			if len(m.backups) > 0 && (key == "enter" || key == "r") {
-				id := m.backups[m.backupIndex].ID
-				b, e := m.s.Backups.Content(id)
-				if e != nil {
-					m.notice = e.Error()
-					return m, nil
-				}
-				m.preview("Restore записывает файл после проверки и backup текущего. Apply отдельно.\n"+diff(m.s.Original, b), func() tea.Msg {
-					return result{err: m.s.Restore(id), text: "Backup восстановлен; Apply отдельно"}
-				})
-			}
-			return m, nil
 		}
 		if m.search {
 			if key == "esc" || key == "enter" {
@@ -372,8 +421,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cursor = 0
 		}
 		switch key {
-		case "enter":
-			m.openRoute(editRoute)
+		case "enter", "f2":
+			if len(rows) > 0 {
+				m.mode, m.overviewTab, m.overviewOffset, m.overviewServer, m.notice = "overview", 0, 0, 0, ""
+				if key == "f2" {
+					m.overviewTab = 1
+				}
+			}
 		case "?", "tab":
 			m.mode = "actions"
 			m.menuIndex = 0
@@ -420,25 +474,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.preview("Сохранить изменения в файл?\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
 				return result{err: m.s.Save(), text: "Сохранено после валидации; Apply отдельно"}
 			})
-		case "p":
-			m.preview("Apply: restart/recreate могут оборвать активные TCP-соединения. При сбое возможен rollback только к подтверждённой рабочей точке.\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
-				return result{err: m.s.Apply(), text: "Применено, содержимое и frontend проверены"}
-			})
-		case "x":
-			m.preview("Save & Apply: возможен разрыв активных TCP-соединений.\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
-				if e := m.s.CheckApplyMethod(); e != nil {
-					return result{err: e}
-				}
-				if e := m.s.Save(); e != nil {
-					return result{err: e}
-				}
-				return result{err: m.s.Apply(), text: "Сохранено и применено"}
-			})
+		case "p", "x":
+			m.previewApply(key == "x")
 		case "v":
 			m.busy = true
-			return m, func() tea.Msg {
-				return result{err: m.s.Validate(m.s.Document.Bytes()), text: "Кандидат прошёл haproxy -c"}
-			}
+			return m, m.validateCmd()
 		case "r":
 			m.preview("Перечитать файл с диска? Несохранённые изменения будут потеряны.", func() tea.Msg { return result{err: m.s.Reload(), text: "Файл перечитан"} })
 		case "b":
@@ -462,7 +502,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				details := m.routeDetails(rows[m.cursor])
 				if m.useDashboard() {
 					width, _, listWidth, _ := m.dashboardDimensions()
-					details = m.dashboardDetails(rows[m.cursor], width-listWidth-5)
+					details = m.dashboardDetails(rows[m.cursor], m.dashboardDetailWidth(width, listWidth)-4)
 				}
 				last := max(0, len(details)-height)
 				step := max(1, height-1)
@@ -473,12 +513,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "i":
 			if len(rows) > 0 {
-				f := rows[m.cursor]
-				lines := append([]string{f.Name}, m.routeDetails(f)...)
-				m.view.SetContent(strings.Join(lines, "\n"))
-				m.view.GotoTop()
-				m.view.SetXOffset(0)
-				m.mode = "view"
+				m.mode, m.overviewTab, m.overviewOffset, m.overviewServer, m.notice = "overview", 3, 0, 0, ""
 			}
 		case "g":
 			if m.cfg.HAProxy.Mode == "docker" {
@@ -487,53 +522,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 					defer cancel()
 					d := platform.Docker{Runner: m.s.Runner, ContainerName: m.cfg.Docker.ContainerName}
-					text, err := d.Logs(ctx)
+					c, err := d.Inspect(ctx)
 					if err != nil {
-						return result{err: err}
+						return result{err: err, viewTitle: "Контейнер Docker"}
 					}
-					return result{text: text}
+					state := "Остановлен"
+					if c.State.Running {
+						state = "Активен"
+					}
+					text := fmt.Sprintf("Контейнер: %s\nОбраз: %s\nСостояние: %s\n\nЖурнал HAProxy\n", m.cfg.Docker.ContainerName, c.Config.Image, state)
+					logs, err := d.Logs(ctx)
+					if err != nil {
+						logs = err.Error()
+					}
+					return result{text: text + logs, viewTitle: "Контейнер Docker"}
 				}
 			}
 		case "l":
-			p, _ := settings.Path()
-			b, e := os.ReadFile(filepath.Join(filepath.Dir(p), "actions.log"))
+			b, e := os.ReadFile(m.s.LogFile)
 			if e != nil {
 				m.notice = e.Error()
 			} else {
-				m.mode = "view"
-				m.view.SetContent(string(b))
+				m.viewTitle = "Журнал действий"
+				m.showDetails("view", string(b))
 				m.view.GotoBottom()
 			}
 		case "t", "h":
 			if len(rows) > 0 {
-				f := rows[m.cursor]
-				b, e := m.s.Document.Backend(f.Backend)
-				if e != nil {
-					m.notice = e.Error()
-					break
-				}
-				m.busy = true
-				tlsEnabled := key == "h"
-				return m, func() tea.Msg {
-					ctx, cancel := context.WithTimeout(context.Background(), time.Duration(m.cfg.Network.ConnectTimeout)*time.Second)
-					defer cancel()
-					type item struct {
-						i int
-						r network.Result
-					}
-					ch := make(chan item, len(b.Servers))
-					for i, s := range b.Servers {
-						go func(i int, s haproxy.Server) {
-							ch <- item{i, network.Probe(ctx, net.JoinHostPort(s.Address, strconv.Itoa(s.Port)), m.cfg.Network.SNI, tlsEnabled)}
-						}(i, s)
-					}
-					results := make([]network.Result, len(b.Servers))
-					for range b.Servers {
-						x := <-ch
-						results[x.i] = x.r
-					}
-					return result{text: fmt.Sprintf("TCP connect time (не ICMP). VLESS+REALITY авторизация не проверяется.\n%+v", results)}
-				}
+				return m.startRouteProbe(rows[m.cursor], key == "h")
 			}
 		}
 		return m, nil
