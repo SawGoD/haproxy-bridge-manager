@@ -44,6 +44,8 @@ type Model struct {
 	menuIndex, backupIndex   int
 	fields                   []textinput.Model
 	focus                    int
+	fieldEditing             bool
+	fieldBefore              string
 	view                     viewport.Model
 	servers                  []haproxy.Server
 	copySource               string
@@ -269,7 +271,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.busy = true
 				return m, m.action
 			}
-			if key == "n" || key == "esc" {
+			if key == "n" || key == "q" || key == "esc" {
 				m.mode = m.confirmReturn
 				m.action = nil
 				return m, nil

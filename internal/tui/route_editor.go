@@ -72,7 +72,7 @@ func (m *Model) openRoute(operation routeOperation) {
 	m.fields[0].Placeholder = "имя frontend"
 	m.fields[1].Placeholder = "имя backend"
 	m.focus = 0
-	m.fields[0].Focus()
+	m.fieldEditing = false
 	m.mode = "editor"
 	m.resizeRouteInputs()
 }
@@ -90,17 +90,15 @@ func copyName(d *haproxy.Document, source, reserved string) string {
 	}
 }
 
-func (m *Model) focusRouteField(index int) {
-	m.fields[m.focus].Blur()
+func (m *Model) selectRouteField(index int) {
 	m.focus = index
-	m.fields[m.focus].Focus()
 	m.mode = "editor"
 }
 
 func (m *Model) draftPort(applySuggestion bool) (int, error) {
 	port, err := strconv.Atoi(strings.TrimSpace(m.fields[routePortField].Value()))
 	if err != nil || haproxy.ValidatePort(port) != nil {
-		m.focusRouteField(routePortField)
+		m.selectRouteField(routePortField)
 		return 0, fmt.Errorf("Локальный порт: введите число от 1 до 65535")
 	}
 	if m.editing != "" {
@@ -116,7 +114,7 @@ func (m *Model) draftPort(applySuggestion bool) (int, error) {
 		}
 		return port, nil
 	}
-	m.focusRouteField(routePortField)
+	m.selectRouteField(routePortField)
 	if free == 0 {
 		return 0, fmt.Errorf("Порт %d занят. Выше свободных портов нет. Введите другой порт", port)
 	}
@@ -137,12 +135,12 @@ func (m *Model) candidate() error {
 	frontend := haproxy.Frontend{Name: value(0), Backend: value(1), Bind: haproxy.Bind{Address: value(2), Port: port}, TimeoutClient: value(5)}
 	for index, name := range []string{frontend.Name, frontend.Backend} {
 		if err := haproxy.ValidateIdentifier(name); err != nil {
-			m.focusRouteField(index)
+			m.selectRouteField(index)
 			return fmt.Errorf("%s: используйте латинские буквы, цифры, дефис или подчёркивание. Первый символ — буква", routeLabels[index])
 		}
 	}
 	if err := haproxy.ValidateAddress(frontend.Bind.Address); err != nil {
-		m.focusRouteField(2)
+		m.selectRouteField(2)
 		return fmt.Errorf("Адрес прослушивания: %w", err)
 	}
 	if len(m.servers) == 0 {
@@ -182,7 +180,7 @@ func (m *Model) candidate() error {
 		if old.Bind != frontend.Bind {
 			listener, err := net.Listen("tcp", net.JoinHostPort(frontend.Bind.Address, strconv.Itoa(port)))
 			if err != nil {
-				m.focusRouteField(routePortField)
+				m.selectRouteField(routePortField)
 				return fmt.Errorf("Адрес прослушивания занят или недоступен: %w", err)
 			}
 			listener.Close()

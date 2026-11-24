@@ -203,7 +203,7 @@ func (m *Model) openServer(add bool) {
 	}
 	m.serverFields[1].Placeholder = "IP или DNS"
 	m.serverFocus = 1
-	m.serverFields[m.serverFocus].Focus()
+	m.fieldEditing = false
 	m.serverNew = add
 	m.mode = "serverform"
 	m.notice = ""
@@ -215,7 +215,7 @@ func (m *Model) storeServer() error {
 	for i, field := range m.serverFields {
 		values[i] = strings.TrimSpace(field.Value())
 		if values[i] == "" || strings.ContainsAny(values[i], " \t\n\r") {
-			m.focusServerField(i)
+			m.serverFocus = i
 			return fmt.Errorf("Заполните поле «%s»", serverLabels[i])
 		}
 	}
@@ -225,7 +225,7 @@ func (m *Model) storeServer() error {
 	}
 	for i, existing := range m.servers {
 		if existing.Name == server.Name && (m.serverNew || i != m.serverIndex) {
-			m.focusServerField(0)
+			m.serverFocus = 0
 			return fmt.Errorf("Сервер с таким именем уже существует")
 		}
 	}
@@ -241,10 +241,27 @@ func (m *Model) storeServer() error {
 	return nil
 }
 
-func (m *Model) focusServerField(index int) {
-	m.serverFields[m.serverFocus].Blur()
-	m.serverFocus = index
-	m.serverFields[index].Focus()
+func (m *Model) startFieldEdit(field *textinput.Model) tea.Cmd {
+	m.fieldBefore = field.Value()
+	m.fieldEditing = true
+	field.CursorEnd()
+	return field.Focus()
+}
+
+func (m *Model) updateFieldEdit(field *textinput.Model, key tea.KeyMsg) tea.Cmd {
+	switch key.String() {
+	case "esc":
+		field.SetValue(m.fieldBefore)
+		fallthrough
+	case "enter":
+		field.Blur()
+		m.fieldEditing = false
+		return nil
+	default:
+		var cmd tea.Cmd
+		*field, cmd = field.Update(key)
+		return cmd
+	}
 }
 
 const (
@@ -319,8 +336,12 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return m, cmd, true
 	}
 	if m.mode == "editor" || m.mode == "servers" {
+		if m.fieldEditing {
+			cmd := m.updateFieldEdit(&m.fields[m.focus], key)
+			return m, cmd, true
+		}
 		switch k {
-		case "ctrl+s":
+		case "s", "ctrl+s":
 			if err := m.candidate(); err != nil {
 				m.notice = err.Error()
 			}
@@ -336,35 +357,27 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 	}
 	if m.mode == "editor" {
 		switch k {
-		case "esc":
+		case "q", "esc":
 			m.mode = "main"
 			m.notice = ""
 			return m, nil, true
-		case "f2":
-			m.fields[m.focus].Blur()
+		case "f2", "tab", "shift+tab", "right":
 			m.mode = "servers"
 			return m, nil, true
-		case "tab", "enter", "shift+tab", "down", "up":
-			delta := 1
-			if k == "shift+tab" || k == "up" {
-				delta = -1
-			}
-			if (k == "tab" || k == "enter") && m.focus == len(m.fields)-1 {
-				m.fields[m.focus].Blur()
-				m.mode = "servers"
-			} else {
-				m.focusRouteField((m.focus + delta + len(m.fields)) % len(m.fields))
-			}
-			return m, nil, true
+		case "enter":
+			cmd := m.startFieldEdit(&m.fields[m.focus])
+			return m, cmd, true
+		case "down", "j":
+			m.focus = min(m.focus+1, len(m.fields)-1)
+		case "up", "k":
+			m.focus = max(0, m.focus-1)
 		}
-		var cmd tea.Cmd
-		m.fields[m.focus], cmd = m.fields[m.focus].Update(msg)
-		return m, cmd, true
+		return m, nil, true
 	}
 	if m.mode == "servers" {
 		switch k {
-		case "esc", "f2", "tab", "shift+tab":
-			m.focusRouteField(m.focus)
+		case "q", "esc", "f2", "tab", "shift+tab", "left":
+			m.mode = "editor"
 		case "a":
 			m.openServer(true)
 		case "e", "enter":
@@ -395,24 +408,26 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	}
 	if m.mode == "serverform" {
+		f := &m.serverFields[m.serverFocus]
+		if m.fieldEditing {
+			cmd := m.updateFieldEdit(f, key)
+			return m, cmd, true
+		}
 		switch k {
-		case "esc":
+		case "q", "esc":
 			m.mode = "servers"
+			m.notice = ""
 			return m, nil, true
-		case "ctrl+s":
+		case "s", "ctrl+s":
 			if e := m.storeServer(); e != nil {
 				m.notice = e.Error()
 			}
 			return m, nil, true
-		case "tab", "shift+tab", "down", "up":
-			delta := 1
-			if k == "shift+tab" || k == "up" {
-				delta = -1
-			}
-			m.focusServerField((m.serverFocus + delta + len(m.serverFields)) % len(m.serverFields))
-			return m, nil, true
+		case "tab", "down", "j":
+			m.serverFocus = min(m.serverFocus+1, len(m.serverFields)-1)
+		case "shift+tab", "up", "k":
+			m.serverFocus = max(0, m.serverFocus-1)
 		case " ", "enter":
-			f := &m.serverFields[m.serverFocus]
 			switch m.serverFocus {
 			case serverRoleField:
 				f.SetValue(cycle(f.Value(), "primary", "backup"))
@@ -424,10 +439,12 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 				f.SetValue(cycle(f.Value(), "enabled", "disabled"))
 				return m, nil, true
 			}
+			if k == "enter" {
+				cmd := m.startFieldEdit(f)
+				return m, cmd, true
+			}
 		}
-		var cmd tea.Cmd
-		m.serverFields[m.serverFocus], cmd = m.serverFields[m.serverFocus].Update(msg)
-		return m, cmd, true
+		return m, nil, true
 	}
 	return m, nil, false
 }

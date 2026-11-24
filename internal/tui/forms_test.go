@@ -137,6 +137,63 @@ func TestActionMenuAndPreviewCancel(t *testing.T) {
 		t.Fatal("cancel lost the editor draft")
 	}
 }
+
+func TestEditorNavigationAndExplicitFieldEdit(t *testing.T) {
+	m := sampleModel(t)
+	key := func(keyType tea.KeyType) { m = press(m, tea.KeyMsg{Type: keyType}) }
+	letter := func(r rune) { m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}) }
+	key(tea.KeyEnter)
+	name := m.fields[0].Value()
+	if m.mode != "editor" || m.fields[0].Focused() || m.fieldEditing {
+		t.Fatal("route opened in input mode")
+	}
+	letter('q')
+	if m.mode != "main" || m.fields[0].Value() != name {
+		t.Fatal("q did not leave the route editor")
+	}
+	key(tea.KeyEnter)
+	key(tea.KeyEnter)
+	letter('q')
+	if !m.fieldEditing || m.fields[0].Value() != name+"q" {
+		t.Fatal("explicit input did not accept q")
+	}
+	key(tea.KeyEsc)
+	if m.mode != "editor" || m.fieldEditing || m.fields[0].Value() != name {
+		t.Fatal("escape did not restore the field")
+	}
+	key(tea.KeyTab)
+	key(tea.KeyEnter)
+	if m.mode != "serverform" || m.fieldEditing || m.serverFields[m.serverFocus].Focused() {
+		t.Fatal("server opened in input mode")
+	}
+	key(tea.KeyEnter)
+	key(tea.KeyCtrlU)
+	for _, r := range "2001:db8::5" {
+		letter(r)
+	}
+	key(tea.KeyEnter)
+	letter('s')
+	if m.mode != "servers" || m.servers[0].Address != "2001:db8::5" {
+		t.Fatal(m.mode, m.notice)
+	}
+	key(tea.KeyEnter)
+	letter('q')
+	if m.mode != "servers" {
+		t.Fatal(m.mode)
+	}
+	letter('q')
+	if m.mode != "editor" {
+		t.Fatal(m.mode)
+	}
+	letter('s')
+	if m.mode != "confirm" {
+		t.Fatal(m.mode, m.notice)
+	}
+	letter('q')
+	if m.mode != "editor" || m.fieldEditing || m.servers[0].Address != "2001:db8::5" {
+		t.Fatal("leaving preview lost the draft")
+	}
+}
 func TestDiffShowsOnlyChangeContext(t *testing.T) {
 	old := strings.Repeat("unchanged\n", 20) + "old\n" + strings.Repeat("tail\n", 20)
 	next := strings.Replace(old, "old\n", "new\n", 1)
