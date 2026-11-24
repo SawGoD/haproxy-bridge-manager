@@ -125,7 +125,7 @@ func (m Model) routeLayout(count, cursor int) (listWidth, start, end, detailHeig
 		start := max(0, cursor-limit+1)
 		return listWidth, start, min(count, start+limit), height - 2
 	}
-	width, height := m.width-4, m.height-10
+	width, height := m.width-4, m.height-12
 	if m.search || m.filter != "" {
 		height--
 	}

@@ -85,8 +85,8 @@ func framedRows(title string, rows []string, width, height int) string {
 func (m Model) useDashboard() bool { return m.width >= 100 && m.height >= 26 }
 
 func dashboardKeys(width int) []string {
-	actions := [][2]string{{"A", "Добавить"}, {"D", "Удалить"}, {"T", "Проверка и тест"},
-		{"S", "Сохранить"}, {"P", "Применить"}, {"B", "Бэкапы"}, {"O", "Настройки"}, {"Q", "Выход"}}
+	actions := [][2]string{{"A", "Добавить"}, {"C", "Копия"}, {"D", "Удалить"}, {"T", "Проверка и тест"},
+		{"S", "Сохранить"}, {"P", "Применить"}, {"Q", "Выход"}}
 	keys := make([]string, 0, len(actions))
 	for _, action := range actions {
 		keys = append(keys, accent.Bold(true).Render("["+action[0]+"]")+" "+normal.Render(action[1]))
@@ -97,7 +97,7 @@ func dashboardKeys(width int) []string {
 		middle := len(keys) / 2
 		rows = []string{strings.Join(keys[:middle], sep), strings.Join(keys[middle:], sep)}
 	}
-	return append(rows, hint("↑↓", "маршрут")+"   "+hint("Enter", "обзор")+"   "+hint("Pg↑↓", "детали")+"   "+hint("I", "статистика")+"   "+hint("C", "копия")+"   "+hint("/", "поиск")+"   "+hint("Tab", "меню"))
+	return append(rows, hint("↑↓", "маршрут")+"   "+hint("Enter", "обзор")+"   "+hint("Pg↑↓", "детали")+"   "+hint("/", "поиск")+"   "+hint("Tab", "меню"))
 }
 
 func (m Model) dashboardDimensions() (width, height, listWidth int, footer []string) {
@@ -129,7 +129,7 @@ func (m Model) dashboardDetailWidth(width, listWidth int) int {
 
 func (m Model) dashboardNavigation() []string {
 	items := []string{dashboardSelection.Render("› Маршруты"), hint("F2", "Серверы"),
-		hint("B", "Бэкапы")}
+		hint("I", "Статистика"), hint("B", "Бэкапы")}
 	if m.cfg.HAProxy.Mode == "docker" {
 		items = append(items, hint("G", "Контейнер"))
 	}

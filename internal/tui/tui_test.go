@@ -16,6 +16,39 @@ func TestWizard(t *testing.T) {
 		t.Fatal(m.mode)
 	}
 }
+
+func TestSearchRoutesByNameAddressAndPort(t *testing.T) {
+	m := sampleModel(t)
+	server, err := m.s.Document.Server("de1_out", "de1-public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Address, server.Port = "2001:db8::5", 8443
+	if err := m.s.Document.UpdateServer("de1_out", server.Name, server); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ query, route string }{
+		{"USA1_IN", "usa1_in"},
+		{" lv1_out ", "lv1_in"},
+		{"10446", "se1_in"},
+		{"127.0.0.1:10444", "usa1_in"},
+		{"198.51.100.10", "usa1_in"},
+		{"198.51.100.10:443", "usa1_in"},
+		{"2001:DB8::5", "de1_in"},
+		{"[2001:db8::5]:8443", "de1_in"},
+		{"8443", "de1_in"},
+		{"missing.example", ""},
+	} {
+		m.filter = tc.query
+		rows := m.rows()
+		if tc.route == "" && len(rows) == 0 {
+			continue
+		}
+		if len(rows) != 1 || rows[0].Name != tc.route {
+			t.Errorf("filter %q: want %q, got %v", tc.query, tc.route, rows)
+		}
+	}
+}
 func TestUnknownAndDeleteConfirmation(t *testing.T) {
 	dir := t.TempDir()
 	s := settings.Default()

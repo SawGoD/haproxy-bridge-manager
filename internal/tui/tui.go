@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -121,10 +122,32 @@ func (m Model) rows() []haproxy.Frontend {
 	if e != nil {
 		return nil
 	}
+	query := strings.ToLower(strings.TrimSpace(m.filter))
+	if query == "" {
+		return f
+	}
+	matches := func(value string) bool {
+		return strings.Contains(strings.ToLower(value), query)
+	}
+	matchesEndpoint := func(address string, port int) bool {
+		p := strconv.Itoa(port)
+		return matches(address) || matches(p) || matches(net.JoinHostPort(address, p))
+	}
 	var out []haproxy.Frontend
-	for _, x := range f {
-		if strings.Contains(strings.ToLower(x.Name), strings.ToLower(m.filter)) {
-			out = append(out, x)
+	for _, route := range f {
+		if matches(route.Name) || matches(route.Backend) || matchesEndpoint(route.Bind.Address, route.Bind.Port) {
+			out = append(out, route)
+			continue
+		}
+		backend, err := m.s.Document.Backend(route.Backend)
+		if err != nil {
+			continue
+		}
+		for _, server := range backend.Servers {
+			if matches(server.Name) || matchesEndpoint(server.Address, server.Port) {
+				out = append(out, route)
+				break
+			}
 		}
 	}
 	return out

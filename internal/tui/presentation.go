@@ -155,9 +155,12 @@ func (m Model) routesView() string {
 		state = "Не сохранено  •  " + state
 	}
 	help := hint("↑↓", "маршрут") + "   " + hint("Enter", "обзор") + "   " + hint("Pg↑↓", "детали") + "\n" +
-		hint("T", "проверка и тест") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
-		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("Q", "выход")
+		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("D", "удалить") + "   " + hint("T", "тест") + "\n" +
+		hint("S", "сохранить") + "  " + hint("P", "применить") + "  " + hint("Q", "выход") + "  " + hint("/", "поиск")
 	w := m.width - 4
+	sections := m.dashboardNavigation()
+	navigation := strings.Join(sections[1:4], "  ") + "  " + hint("Tab", "меню") + "\n" +
+		strings.Join(sections[4:], "   ") + "\n"
 	var search string
 	if m.search {
 		search = accent.Render("Поиск: " + m.filter + "▏")
@@ -172,7 +175,7 @@ func (m Model) routesView() string {
 		if m.filter != "" {
 			body = "Совпадений нет. Esc — сбросить поиск."
 		}
-		return m.screen("Маршруты", state, search+body, help)
+		return m.screen("Маршруты", state, navigation+search+body, help)
 	}
 	cursor := min(max(0, m.cursor), len(rows)-1)
 	details := m.routeDetails(rows[cursor])
@@ -201,7 +204,7 @@ func (m Model) routesView() string {
 	} else {
 		body += "\n" + strings.Join(details, "\n")
 	}
-	return m.screen("Маршруты", state, search+body, help)
+	return m.screen("Маршруты", state, navigation+search+body, help)
 }
 func (m *Model) resizeRouteInputs() {
 	width := max(10, m.width-27)

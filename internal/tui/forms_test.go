@@ -199,7 +199,7 @@ usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
 	}
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
 	m = next.(Model)
-	for i := 0; i < 4; i++ {
+	for range m.routeDetails(m.rows()[0]) {
 		m = press(m, tea.KeyMsg{Type: tea.KeyPgDown})
 		if strings.Contains(m.View(), "Connection refused") {
 			break
