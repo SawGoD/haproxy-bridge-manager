@@ -11,7 +11,7 @@ import (
 )
 
 func TestFixtureAtomicMutationBackupAndRestore(t *testing.T) {
-	original := fixture(t)
+	original := fixture()
 	target := filepath.Join(t.TempDir(), "haproxy.cfg")
 	if err := os.WriteFile(target, original, 0o640); err != nil {
 		t.Fatal(err)

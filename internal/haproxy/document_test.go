@@ -3,20 +3,13 @@ package haproxy
 import (
 	"bytes"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/SawGoD/haproxy-bridge/internal/testfixture"
 )
 
-func fixture(t *testing.T) []byte {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "haproxy.cfg"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return data
-}
+func fixture() []byte { return []byte(testfixture.HAProxyConfig) }
 
 func TestRoundTrip(t *testing.T) {
 	inputs := [][]byte{
@@ -24,7 +17,7 @@ func TestRoundTrip(t *testing.T) {
 		[]byte("# comment only"),
 		[]byte("global\r\n\tdaemon # keep\r\nfrontend f_in\r\n\tbind 127.0.0.1:10443\r\n"),
 		[]byte("unknown top-level\n\ndefaults\n\tunknown thing\n"),
-		fixture(t),
+		fixture(),
 	}
 	for _, input := range inputs {
 		document, err := Parse(input)
@@ -38,7 +31,7 @@ func TestRoundTrip(t *testing.T) {
 }
 
 func TestFixtureModel(t *testing.T) {
-	document, _ := Parse(fixture(t))
+	document, _ := Parse(fixture())
 	frontends, err := document.Frontends()
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +60,7 @@ func TestFixtureModel(t *testing.T) {
 }
 
 func TestTargetedCRUDPreservesUnknownAndLV1(t *testing.T) {
-	document, _ := Parse(fixture(t))
+	document, _ := Parse(fixture())
 	original := document.Bytes()
 	if err := document.UpdateFrontend("de1_in", Frontend{Name: "de1_in", Bind: Bind{Address: "127.0.0.1", Port: 11443}}); err != nil {
 		t.Fatal(err)
@@ -134,7 +127,7 @@ func TestCreateUpdateDelete(t *testing.T) {
 }
 
 func TestReferencedBackendCannotBeDeletedOrRenamed(t *testing.T) {
-	document, _ := Parse(fixture(t))
+	document, _ := Parse(fixture())
 	before := document.Bytes()
 	if err := document.DeleteBackend("de1_out"); !errors.Is(err, ErrInUse) {
 		t.Fatalf("got %v", err)

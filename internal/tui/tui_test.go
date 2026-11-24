@@ -46,18 +46,7 @@ func TestUnknownAndDeleteConfirmation(t *testing.T) {
 }
 
 func TestFifthNodeEditor(t *testing.T) {
-	dir := t.TempDir()
-	cfg := settings.Default()
-	cfg.General.ConfigPath = filepath.Join(dir, "haproxy.cfg")
-	cfg.General.BackupDir = filepath.Join(dir, "backups")
-	b, e := os.ReadFile("../../testdata/haproxy.cfg")
-	if e != nil {
-		t.Fatal(e)
-	}
-	os.WriteFile(cfg.General.ConfigPath, b, 0600)
-	p := filepath.Join(dir, "config.toml")
-	cfg.Save(p)
-	m := New(p)
+	m := sampleModel(t)
 	if len(m.rows()) != 4 {
 		t.Fatalf("expected four routes: %s", m.View())
 	}
@@ -72,7 +61,7 @@ func TestFifthNodeEditor(t *testing.T) {
 		{Name: "public", Address: "2001:db8::1", Port: 443, Weight: 1, HealthCheck: true},
 		{Name: "nb", Address: "100.100.10.20", Port: 443, Backup: true, Weight: 1, HealthCheck: true},
 	}
-	if e = m.candidate(); e != nil {
+	if e := m.candidate(); e != nil {
 		t.Fatal(e)
 	}
 	if m.mode != "confirm" {
@@ -135,7 +124,7 @@ func TestCopyRouteOffersFreePortAndKeepsIndependentBackend(t *testing.T) {
 		t.Fatal(f, err)
 	}
 	original, err := m.s.Document.Server("de1_out", "de1-public")
-	if err != nil || original.Address != "212.113.112.170" {
+	if err != nil || original.Address != "192.0.2.10" {
 		t.Fatal(original, err)
 	}
 	updated, err := m.s.Document.Server("de1_out_copy", "de1-public")

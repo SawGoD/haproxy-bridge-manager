@@ -5,6 +5,7 @@ import (
 	"github.com/SawGoD/haproxy-bridge/internal/monitor"
 	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
+	"github.com/SawGoD/haproxy-bridge/internal/testfixture"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"os"
@@ -20,15 +21,11 @@ func sampleModel(t *testing.T) Model {
 	cfg := settings.Default()
 	cfg.General.ConfigPath = filepath.Join(dir, "haproxy.cfg")
 	cfg.General.BackupDir = filepath.Join(dir, "backups")
-	b, e := os.ReadFile("../../testdata/haproxy.cfg")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if e = os.WriteFile(cfg.General.ConfigPath, b, 0600); e != nil {
+	if e := os.WriteFile(cfg.General.ConfigPath, []byte(testfixture.HAProxyConfig), 0600); e != nil {
 		t.Fatal(e)
 	}
 	p := filepath.Join(dir, "config.toml")
-	if e = cfg.Save(p); e != nil {
+	if e := cfg.Save(p); e != nil {
 		t.Fatal(e)
 	}
 	return New(p)

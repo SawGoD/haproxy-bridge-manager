@@ -44,7 +44,7 @@ func TestIdentifierPortAndRoleValidation(t *testing.T) {
 }
 
 func TestBindConflictAndAtomicFailure(t *testing.T) {
-	document, _ := Parse(fixture(t))
+	document, _ := Parse(fixture())
 	before := string(document.Bytes())
 	frontend := Frontend{Name: "new_in", Bind: Bind{Address: "127.0.0.1", Port: 10445}}
 	if err := document.CreateFrontend(frontend); !errors.Is(err, ErrInvalid) {
@@ -71,7 +71,7 @@ func TestHealthCheckAndIPv6Endpoints(t *testing.T) {
 }
 
 func TestCandidateValidator(t *testing.T) {
-	if err := (Validator{}).Validate(fixture(t)); err != nil {
+	if err := (Validator{}).Validate(fixture()); err != nil {
 		t.Fatal(err)
 	}
 	if err := (Validator{}).Validate([]byte("frontend bad\n\tbind bad endpoint\n")); err == nil {
