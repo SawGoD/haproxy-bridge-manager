@@ -3,8 +3,8 @@ package tui
 import (
 	"fmt"
 	"github.com/SawGoD/haproxy-bridge/internal/haproxy"
-	"net"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -151,82 +151,109 @@ func (m *Model) savePreferences() error {
 	m.open()
 	return nil
 }
-func (m Model) serverLines() []string {
-	var out []string
-	for _, l := range strings.Split(m.area.Value(), "\n") {
-		if strings.TrimSpace(l) != "" {
-			out = append(out, l)
-		}
-	}
-	return out
-}
 func (m *Model) openServer(add bool) {
-	lines := m.serverLines()
-	values := []string{"", "", "primary", "1", "check", "enabled", "3s", "2", "2"}
+	var server haproxy.Server
 	if !add {
-		if len(lines) == 0 {
+		if len(m.servers) == 0 {
 			return
 		}
-		m.serverIndex = min(m.serverIndex, len(lines)-1)
-		values = strings.Fields(lines[m.serverIndex])
-		if len(values) != 9 {
-			m.notice = "Не удалось прочитать параметры сервера"
-			return
-		}
+		server = m.servers[m.serverIndex]
 	} else {
-		values[0] = fmt.Sprintf("server%d", len(lines)+1)
-		values[1] = fmt.Sprintf("example.com:%d", m.cfg.Network.DefaultTargetPort)
-		values[6] = fmt.Sprintf("%ds", m.cfg.Healthcheck.Interval)
-		values[7] = strconv.Itoa(m.cfg.Healthcheck.Fall)
-		values[8] = strconv.Itoa(m.cfg.Healthcheck.Rise)
-		if !m.cfg.Healthcheck.Enabled {
-			values[4] = "nocheck"
+		for i := 1; ; i++ {
+			server.Name = "server" + strconv.Itoa(i)
+			if !slices.ContainsFunc(m.servers, func(s haproxy.Server) bool { return s.Name == server.Name }) {
+				break
+			}
 		}
+		server.Weight, server.WeightSet = 1, true
+		server.Port = m.cfg.Network.DefaultTargetPort
+		server.HealthCheck = m.cfg.Healthcheck.Enabled
+		server.CheckDisabled = !server.HealthCheck
+		server.Interval = fmt.Sprintf("%ds", m.cfg.Healthcheck.Interval)
+		server.Fall, server.Rise = m.cfg.Healthcheck.Fall, m.cfg.Healthcheck.Rise
+	}
+	role, state, health := "primary", "enabled", "inherit"
+	if server.Backup {
+		role = "backup"
+	}
+	if server.Disabled {
+		state = "disabled"
+	}
+	if server.HealthCheck {
+		health = "check"
+	} else if server.CheckDisabled {
+		health = "nocheck"
+	}
+	weight, interval, fall, rise := "-", "-", "-", "-"
+	if server.WeightSet || server.Weight != 0 {
+		weight = strconv.Itoa(server.Weight)
+	}
+	if server.Interval != "" {
+		interval = server.Interval
+	}
+	if server.Fall != 0 {
+		fall = strconv.Itoa(server.Fall)
+	}
+	if server.Rise != 0 {
+		rise = strconv.Itoa(server.Rise)
 	}
 	m.serverFields = nil
-	for _, s := range values {
-		m.serverFields = append(m.serverFields, input(s))
+	for _, value := range []string{server.Name, server.Address, strconv.Itoa(server.Port), role, weight, health, state, interval, fall, rise} {
+		m.serverFields = append(m.serverFields, input(value))
 	}
-	m.serverFocus = 0
-	m.serverFields[0].Focus()
+	m.serverFields[1].Placeholder = "IP или DNS"
+	m.serverFocus = 1
+	m.serverFields[m.serverFocus].Focus()
 	m.serverNew = add
 	m.mode = "serverform"
 	m.notice = ""
+	m.resizeRouteInputs()
 }
+
 func (m *Model) storeServer() error {
-	v := make([]string, len(m.serverFields))
-	for i, f := range m.serverFields {
-		v[i] = strings.TrimSpace(f.Value())
-		if v[i] == "" || strings.ContainsAny(v[i], " \t\n\r") {
+	values := make([]string, len(m.serverFields))
+	for i, field := range m.serverFields {
+		values[i] = strings.TrimSpace(field.Value())
+		if values[i] == "" || strings.ContainsAny(values[i], " \t\n\r") {
+			m.focusServerField(i)
 			return fmt.Errorf("Заполните поле «%s»", serverLabels[i])
 		}
 	}
-	if e := validateServerFields(v); e != nil {
-		return e
+	server, err := parseServerFields(values)
+	if err != nil {
+		return err
 	}
-	lines := m.serverLines()
-	for i, l := range lines {
-		if !m.serverNew && i == m.serverIndex {
-			continue
-		}
-		if strings.Fields(l)[0] == v[0] {
+	for i, existing := range m.servers {
+		if existing.Name == server.Name && (m.serverNew || i != m.serverIndex) {
+			m.focusServerField(0)
 			return fmt.Errorf("Сервер с таким именем уже существует")
 		}
 	}
-	line := strings.Join(v, " ")
 	if m.serverNew {
-		lines = append(lines, line)
-		m.serverIndex = len(lines) - 1
+		m.servers = append(m.servers, server)
+		m.serverIndex = len(m.servers) - 1
 	} else {
-		lines[m.serverIndex] = line
+		server.Role = m.servers[m.serverIndex].Role
+		m.servers[m.serverIndex] = server
 	}
-	m.area.SetValue(strings.Join(lines, "\n"))
 	m.mode = "servers"
 	m.notice = ""
 	return nil
 }
 
-var serverLabels = []string{"Имя сервера", "Адрес и порт", "Роль", "Вес", "Health check", "Состояние", "Интервал", "Fall", "Rise"}
+func (m *Model) focusServerField(index int) {
+	m.serverFields[m.serverFocus].Blur()
+	m.serverFocus = index
+	m.serverFields[index].Focus()
+}
+
+const (
+	serverRoleField   = 3
+	serverHealthField = 5
+	serverStateField  = 6
+)
+
+var serverLabels = []string{"Имя сервера", "Адрес", "Порт", "Роль", "Вес", "Health check", "Состояние", "Интервал", "Fall", "Rise"}
 
 func cycle(value string, values ...string) string {
 	for i, v := range values {
@@ -291,29 +318,43 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 		m.prefs[m.prefIndex].input, cmd = m.prefs[m.prefIndex].input.Update(msg)
 		return m, cmd, true
 	}
+	if m.mode == "editor" || m.mode == "servers" {
+		switch k {
+		case "ctrl+s":
+			if err := m.candidate(); err != nil {
+				m.notice = err.Error()
+			}
+			return m, nil, true
+		case "f3":
+			if m.editing == "" {
+				if _, err := m.draftPort(true); err != nil {
+					m.notice = err.Error()
+				}
+				return m, nil, true
+			}
+		}
+	}
 	if m.mode == "editor" {
 		switch k {
 		case "esc":
 			m.mode = "main"
-			return m, nil, true
-		case "ctrl+s":
-			if e := m.candidate(); e != nil {
-				m.notice = e.Error()
-			}
-			return m, nil, true
-		case "f2":
-			m.mode = "servers"
-			m.serverIndex = 0
 			m.notice = ""
 			return m, nil, true
-		case "tab", "shift+tab", "down", "up":
+		case "f2":
+			m.fields[m.focus].Blur()
+			m.mode = "servers"
+			return m, nil, true
+		case "tab", "enter", "shift+tab", "down", "up":
 			delta := 1
 			if k == "shift+tab" || k == "up" {
 				delta = -1
 			}
-			m.fields[m.focus].Blur()
-			m.focus = (m.focus + delta + len(m.fields)) % len(m.fields)
-			m.fields[m.focus].Focus()
+			if (k == "tab" || k == "enter") && m.focus == len(m.fields)-1 {
+				m.fields[m.focus].Blur()
+				m.mode = "servers"
+			} else {
+				m.focusRouteField((m.focus + delta + len(m.fields)) % len(m.fields))
+			}
 			return m, nil, true
 		}
 		var cmd tea.Cmd
@@ -321,16 +362,15 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 		return m, cmd, true
 	}
 	if m.mode == "servers" {
-		lines := m.serverLines()
 		switch k {
-		case "esc":
-			m.mode = "editor"
+		case "esc", "f2", "tab", "shift+tab":
+			m.focusRouteField(m.focus)
 		case "a":
 			m.openServer(true)
 		case "e", "enter":
-			m.openServer(false)
+			m.openServer(len(m.servers) == 0)
 		case "j", "down":
-			m.serverIndex = min(m.serverIndex+1, max(0, len(lines)-1))
+			m.serverIndex = min(m.serverIndex+1, max(0, len(m.servers)-1))
 		case "k", "up":
 			m.serverIndex = max(0, m.serverIndex-1)
 		case "ctrl+up", "ctrl+down":
@@ -338,19 +378,17 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 			if k == "ctrl+up" {
 				other = m.serverIndex - 1
 			}
-			if other >= 0 && other < len(lines) {
-				lines[other], lines[m.serverIndex] = lines[m.serverIndex], lines[other]
+			if other >= 0 && other < len(m.servers) {
+				m.servers[other], m.servers[m.serverIndex] = m.servers[m.serverIndex], m.servers[other]
 				m.serverIndex = other
-				m.area.SetValue(strings.Join(lines, "\n"))
 			}
 		case "d":
-			if len(lines) > 0 {
+			if len(m.servers) > 0 {
 				i := m.serverIndex
-				name := strings.Fields(lines[i])[0]
-				m.preview("Удалить сервер "+name+" из редактируемой ноды?\nИзменение будет записано только после Save.", func() tea.Msg {
-					remaining := append(append([]string{}, lines[:i]...), lines[i+1:]...)
-					data := strings.Join(remaining, "\n")
-					return result{serverData: &data, returnMode: "servers", text: "Сервер удалён из кандидата"}
+				name := m.servers[i].Name
+				m.preview("Удалить сервер "+name+" из черновика маршрута?", func() tea.Msg {
+					remaining := slices.Delete(slices.Clone(m.servers), i, i+1)
+					return result{serverData: remaining, returnMode: "servers", text: "Сервер удалён из черновика"}
 				})
 			}
 		}
@@ -371,20 +409,18 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 			if k == "shift+tab" || k == "up" {
 				delta = -1
 			}
-			m.serverFields[m.serverFocus].Blur()
-			m.serverFocus = (m.serverFocus + delta + len(m.serverFields)) % len(m.serverFields)
-			m.serverFields[m.serverFocus].Focus()
+			m.focusServerField((m.serverFocus + delta + len(m.serverFields)) % len(m.serverFields))
 			return m, nil, true
 		case " ", "enter":
 			f := &m.serverFields[m.serverFocus]
 			switch m.serverFocus {
-			case 2:
+			case serverRoleField:
 				f.SetValue(cycle(f.Value(), "primary", "backup"))
 				return m, nil, true
-			case 4:
+			case serverHealthField:
 				f.SetValue(cycle(f.Value(), "inherit", "check", "nocheck"))
 				return m, nil, true
-			case 5:
+			case serverStateField:
 				f.SetValue(cycle(f.Value(), "enabled", "disabled"))
 				return m, nil, true
 			}
@@ -396,39 +432,28 @@ func (m Model) formUpdate(msg tea.Msg) (Model, tea.Cmd, bool) {
 	return m, nil, false
 }
 
-func validateServerFields(v []string) error {
-	host, p, e := net.SplitHostPort(v[1])
-	if e != nil {
-		return fmt.Errorf("Адрес: используйте host:port или [IPv6]:port")
+func parseServerFields(v []string) (haproxy.Server, error) {
+	port, err := strconv.Atoi(v[2])
+	if err != nil || haproxy.ValidatePort(port) != nil {
+		return haproxy.Server{}, fmt.Errorf("Порт сервера: введите число от 1 до 65535")
 	}
-	port, e := strconv.Atoi(p)
-	if e != nil {
-		return e
+	weight, err := optionalNumber(v[4])
+	if err != nil || weight < 0 || weight > 256 {
+		return haproxy.Server{}, fmt.Errorf("Вес: введите 0–256 или -")
 	}
-	weight, e := optionalNumber(v[3])
-	if e != nil {
-		return fmt.Errorf("Вес: введите 0–256 или -")
+	fall, fallErr := optionalNumber(v[8])
+	rise, riseErr := optionalNumber(v[9])
+	if fallErr != nil || riseErr != nil || v[8] != "-" && fall < 1 || v[9] != "-" && rise < 1 {
+		return haproxy.Server{}, fmt.Errorf("Fall и Rise: введите положительное число или -")
 	}
-	fall, e := optionalNumber(v[7])
-	if e != nil {
-		return e
-	}
-	rise, e := optionalNumber(v[8])
-	if e != nil {
-		return e
-	}
-	if v[7] != "-" && fall < 1 || v[8] != "-" && rise < 1 {
-		return fmt.Errorf("Fall и Rise должны быть положительными")
-	}
-	if v[2] != "primary" && v[2] != "backup" || v[4] != "check" && v[4] != "nocheck" && v[4] != "inherit" || v[5] != "enabled" && v[5] != "disabled" {
-		return fmt.Errorf("Выберите роль, health check и состояние пробелом")
-	}
-	interval := v[6]
+	interval := v[7]
 	if interval == "-" {
 		interval = ""
 	}
-	d, _ := haproxy.Parse(nil)
-	return d.CreateBackend(haproxy.Backend{Name: "validation", Servers: []haproxy.Server{{Name: v[0], Address: host, Port: port, Weight: weight, WeightSet: v[3] != "-", Fall: fall, Rise: rise, Interval: interval}}})
+	server := haproxy.Server{Name: v[0], Address: v[1], Port: port, Weight: weight, WeightSet: v[4] != "-",
+		Backup: v[serverRoleField] == "backup", HealthCheck: v[serverHealthField] == "check", CheckDisabled: v[serverHealthField] == "nocheck", Disabled: v[serverStateField] == "disabled",
+		Interval: interval, Fall: fall, Rise: rise}
+	return server, haproxy.ValidateServer(server)
 }
 
 func preferenceOptions(p preference) []string {

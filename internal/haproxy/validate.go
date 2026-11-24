@@ -108,7 +108,7 @@ func validateBackend(backend Backend) error {
 	}
 	seen := make(map[string]struct{})
 	for _, server := range backend.Servers {
-		if err := validateServer(server); err != nil {
+		if err := ValidateServer(server); err != nil {
 			return err
 		}
 		if _, ok := seen[server.Name]; ok {
@@ -119,7 +119,7 @@ func validateBackend(backend Backend) error {
 	return nil
 }
 
-func validateServer(server Server) error {
+func ValidateServer(server Server) error {
 	if err := ValidateIdentifier(server.Name); err != nil {
 		return err
 	}
@@ -229,6 +229,25 @@ func (d *Document) checkBindConflict(bind Bind, except string) error {
 		}
 	}
 	return nil
+}
+
+// NextFreePort returns the first port at or above start absent from all TCP binds.
+// Zero means the range is exhausted.
+func (d *Document) NextFreePort(start int) (int, error) {
+	binds, err := d.proxyBinds()
+	if err != nil {
+		return 0, err
+	}
+	used := make(map[int]bool, len(binds))
+	for _, bind := range binds {
+		used[bind.port] = true
+	}
+	for port := max(1, start); port <= 65535; port++ {
+		if !used[port] {
+			return port, nil
+		}
+	}
+	return 0, nil
 }
 
 func (d *Document) Validate() error {

@@ -11,7 +11,6 @@ import (
 	"github.com/SawGoD/haproxy-bridge/internal/network"
 	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
-	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -27,7 +26,7 @@ type result struct {
 	err          error
 	text         string
 	open         bool
-	serverData   *string
+	serverData   []haproxy.Server
 	returnMode   string
 	settingsData *settings.Settings
 }
@@ -45,9 +44,9 @@ type Model struct {
 	menuIndex, backupIndex   int
 	fields                   []textinput.Model
 	focus                    int
-	area                     textarea.Model
 	view                     viewport.Model
-	pending                  *haproxy.Document
+	servers                  []haproxy.Server
+	copySource               string
 	action                   func() tea.Msg
 	busy                     bool
 	stats                    []monitor.Server
@@ -67,25 +66,16 @@ func newLegacy(p string) Model {
 	m := Model{settingsPath: p, width: 100, height: 30}
 	m.view = viewport.New(m.width-4, m.height-9)
 	m.view.SetHorizontalStep(8)
-	m.area = textarea.New()
-	m.area.CharLimit = 0
-	m.area.SetWidth(90)
-	m.area.SetHeight(18)
-	m.area.ShowLineNumbers = true
 	s, e := settings.Load(p)
 	if os.IsNotExist(e) {
 		m.cfg = settings.Default()
 		m.mode = "wizard"
-		m.area.SetValue(m.cfg.String())
-		m.area.Focus()
 		m.notice = "Первый запуск: настройте TOML. Ctrl+S — сохранить, Esc — выход."
 		return m
 	}
 	if e != nil {
 		m.cfg = settings.Default()
 		m.mode = "settings"
-		m.area.SetValue(m.cfg.String())
-		m.area.Focus()
 		m.notice = e.Error()
 		return m
 	}
@@ -166,243 +156,6 @@ func (m *Model) preview(text string, action func() tea.Msg) {
 	m.mode = "confirm"
 	m.action = action
 }
-func (m *Model) editor(add bool) {
-	m.fields = nil
-	m.focus = 0
-	m.editing = ""
-	values := []string{"", "", m.cfg.Network.DefaultBindAddress, strconv.Itoa(m.cfg.Network.DefaultStartPort), "", "", ""}
-	if !add {
-		rows := m.rows()
-		if len(rows) == 0 {
-			return
-		}
-		f := rows[m.cursor]
-		m.editing = f.Name
-		values = []string{f.Name, f.Backend, f.Bind.Address, strconv.Itoa(f.Bind.Port), "", f.TimeoutClient, ""}
-		b, e := m.s.Document.Backend(f.Backend)
-		if e != nil {
-			m.notice = e.Error()
-			return
-		}
-		values[4] = b.TimeoutConnect
-		values[6] = b.TimeoutServer
-		var lines []string
-		for _, s := range b.Servers {
-			role := "primary"
-			if s.Backup {
-				role = "backup"
-			}
-			enabled := "enabled"
-			if s.Disabled {
-				enabled = "disabled"
-			}
-			check := "inherit"
-			if s.HealthCheck {
-				check = "check"
-			} else if s.CheckDisabled {
-				check = "nocheck"
-			}
-			weight := "-"
-			if s.WeightSet || s.Weight != 0 {
-				weight = strconv.Itoa(s.Weight)
-			}
-			interval := s.Interval
-			if interval == "" {
-				interval = "-"
-			}
-			fall, rise := "-", "-"
-			if s.Fall != 0 {
-				fall = strconv.Itoa(s.Fall)
-			}
-			if s.Rise != 0 {
-				rise = strconv.Itoa(s.Rise)
-			}
-			lines = append(lines, fmt.Sprintf("%s %s %s %s %s %s %s %s %s", s.Name, net.JoinHostPort(s.Address, strconv.Itoa(s.Port)), role, weight, check, enabled, interval, fall, rise))
-		}
-		m.area.SetValue(strings.Join(lines, "\n"))
-	} else {
-		used := map[int]bool{}
-		rows, _ := m.s.Document.Frontends()
-		for _, f := range rows {
-			used[f.Bind.Port] = true
-		}
-		for p := m.cfg.Network.DefaultStartPort; p <= 65535; p++ {
-			if used[p] {
-				continue
-			}
-			l, e := net.Listen("tcp", net.JoinHostPort(m.cfg.Network.DefaultBindAddress, strconv.Itoa(p)))
-			if e == nil {
-				l.Close()
-				values[3] = strconv.Itoa(p)
-				break
-			}
-		}
-		check := "nocheck"
-		if m.cfg.Healthcheck.Enabled {
-			check = "check"
-		}
-		m.area.SetValue(fmt.Sprintf("server1 example.com:%d primary 1 %s enabled %ds %d %d", m.cfg.Network.DefaultTargetPort, check, m.cfg.Healthcheck.Interval, m.cfg.Healthcheck.Fall, m.cfg.Healthcheck.Rise))
-	}
-	for i, v := range values {
-		f := textinput.New()
-		f.Prompt = []string{"Frontend: ", "Backend: ", "Bind address: ", "Port: ", "Connect timeout: ", "Client timeout: ", "Server timeout: "}[i]
-		f.SetValue(v)
-		f.CharLimit = 253
-		f.Width = 50
-		m.fields = append(m.fields, f)
-	}
-	m.area.Blur()
-	m.fields[0].Focus()
-	m.mode = "editor"
-}
-func (m *Model) candidate() error {
-	d, e := haproxy.Parse(m.s.Document.Bytes())
-	if e != nil {
-		return e
-	}
-	v := func(i int) string { return strings.TrimSpace(m.fields[i].Value()) }
-	p, e := strconv.Atoi(v(3))
-	if e != nil {
-		return e
-	}
-	f := haproxy.Frontend{Name: v(0), Backend: v(1), Bind: haproxy.Bind{Address: v(2), Port: p}, TimeoutClient: v(5)}
-	if m.editing != "" {
-		old, e := d.Frontend(m.editing)
-		if e != nil {
-			return e
-		}
-		f.TimeoutServer = old.TimeoutServer
-		if old.Bind != f.Bind {
-			listener, err := net.Listen("tcp", net.JoinHostPort(f.Bind.Address, strconv.Itoa(f.Bind.Port)))
-			if err != nil {
-				return fmt.Errorf("новый bind занят или недоступен (в том числе возможен HAProxy): %w", err)
-			}
-			listener.Close()
-		}
-		if old.Backend != f.Backend {
-			previous, err := d.Backend(old.Backend)
-			if err != nil {
-				return err
-			}
-			if err = d.UpdateFrontend(m.editing, f); err != nil {
-				return err
-			}
-			previous.Name = f.Backend
-			if err = d.UpdateBackend(old.Backend, previous); err != nil {
-				return fmt.Errorf("backend rename blocked (check shared references): %w", err)
-			}
-		}
-	}
-	var servers []haproxy.Server
-	for _, line := range strings.Split(m.area.Value(), "\n") {
-		x := strings.Fields(line)
-		if len(x) == 0 {
-			continue
-		}
-		if len(x) != 9 {
-			return fmt.Errorf("server: требуется 9 полей: name endpoint role weight check enabled interval fall rise")
-		}
-		host, port, e := net.SplitHostPort(x[1])
-		if e != nil {
-			return e
-		}
-		n, e := strconv.Atoi(port)
-		if e != nil {
-			return e
-		}
-		weight, e := optionalNumber(x[3])
-		if e != nil {
-			return e
-		}
-		fall, e := optionalNumber(x[7])
-		if e != nil {
-			return e
-		}
-		rise, e := optionalNumber(x[8])
-		if e != nil {
-			return e
-		}
-		if x[7] != "-" && fall < 1 || x[8] != "-" && rise < 1 {
-			return fmt.Errorf("fall/rise must be positive or - for inheritance")
-		}
-		if x[2] != "primary" && x[2] != "backup" || x[4] != "check" && x[4] != "nocheck" && x[4] != "inherit" || x[5] != "enabled" && x[5] != "disabled" {
-			return fmt.Errorf("invalid server role/check/state")
-		}
-		interval := x[6]
-		if interval == "-" {
-			interval = ""
-		}
-		servers = append(servers, haproxy.Server{Name: x[0], Address: host, Port: n, Backup: x[2] == "backup", Disabled: x[5] == "disabled", Weight: weight, HealthCheck: x[4] == "check", CheckDisabled: x[4] == "nocheck", WeightSet: x[3] != "-", Interval: interval, Fall: fall, Rise: rise})
-	}
-	if len(servers) == 0 {
-		return fmt.Errorf("backend must have a server")
-	}
-	if m.editing == "" {
-		if e = d.CreateBackend(haproxy.Backend{Name: f.Backend, Servers: servers, TimeoutConnect: v(4), TimeoutServer: v(6)}); e != nil {
-			return e
-		}
-		e = d.CreateFrontend(f)
-	} else {
-		e = d.UpdateFrontend(m.editing, f)
-		if e != nil {
-			return e
-		}
-		old, err := d.Backend(f.Backend)
-		if err != nil {
-			return err
-		}
-		old.TimeoutConnect = v(4)
-		old.TimeoutServer = v(6)
-		if e = d.UpdateBackend(f.Backend, old); e != nil {
-			return e
-		}
-		existing := map[string]bool{}
-		wanted := map[string]bool{}
-		for _, srv := range old.Servers {
-			existing[srv.Name] = true
-		}
-		for _, srv := range servers {
-			if wanted[srv.Name] {
-				return fmt.Errorf("duplicate server %s", srv.Name)
-			}
-			wanted[srv.Name] = true
-			if existing[srv.Name] {
-				e = d.UpdateServer(f.Backend, srv.Name, srv)
-			} else {
-				e = d.CreateServer(f.Backend, srv)
-			}
-			if e != nil {
-				return e
-			}
-		}
-		for _, srv := range old.Servers {
-			if !wanted[srv.Name] {
-				if e = d.DeleteServer(f.Backend, srv.Name); e != nil {
-					return e
-				}
-			}
-		}
-		names := []string{}
-		for _, srv := range servers {
-			names = append(names, srv.Name)
-		}
-		if e = d.ReorderServers(f.Backend, names); e != nil {
-			return e
-		}
-	}
-	if e != nil {
-		return e
-	}
-	if e = d.Validate(); e != nil {
-		return e
-	}
-	m.pending = d
-	m.preview("Изменение порта может нарушить внешние приложения. Общий backend затрагивает все его frontend. Приоритет backups: один primary, без allbackups; иначе балансировка.\n"+m.connectionWarning(f.Backend)+diff(m.s.Document.Bytes(), d.Bytes()), func() tea.Msg {
-		m.s.Document = d
-		return result{text: "Изменения в памяти. S — сохранить после проверки HAProxy."}
-	})
-	return nil
-}
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if next, cmd, handled := m.formUpdate(msg); handled {
 		return next, cmd
@@ -413,8 +166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = x.Height
 		m.view.Width = max(20, x.Width-4)
 		m.view.Height = max(3, x.Height-9)
-		m.area.SetWidth(max(20, x.Width-8))
-		m.area.SetHeight(max(5, x.Height-16))
+		m.resizeRouteInputs()
 		return m, nil
 	case result:
 		m.busy = false
@@ -422,8 +174,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cfg = *x.settingsData
 		}
 		if x.serverData != nil {
-			m.area.SetValue(*x.serverData)
-			m.serverIndex = min(m.serverIndex, max(0, len(m.serverLines())-1))
+			m.servers = x.serverData
+			m.serverIndex = min(m.serverIndex, max(0, len(m.servers)-1))
 		}
 		if x.returnMode != "" {
 			m.mode = x.returnMode
@@ -605,7 +357,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch key {
 		case "enter":
-			m.editor(false)
+			m.openRoute(editRoute)
 		case "?", "tab":
 			m.mode = "actions"
 			m.menuIndex = 0
@@ -623,9 +375,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "/":
 			m.search = true
 		case "a":
-			m.editor(true)
+			m.openRoute(newRoute)
 		case "e":
-			m.editor(false)
+			m.openRoute(editRoute)
+		case "c":
+			m.openRoute(copyRoute)
 		case "o":
 			m.mode = "settings"
 			m.beginPreferences(false)

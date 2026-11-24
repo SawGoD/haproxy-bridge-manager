@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/SawGoD/haproxy-bridge/internal/haproxy"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
 	tea "github.com/charmbracelet/bubbletea"
 	"os"
@@ -60,14 +61,17 @@ func TestFifthNodeEditor(t *testing.T) {
 	if len(m.rows()) != 4 {
 		t.Fatalf("expected four routes: %s", m.View())
 	}
-	m.editor(true)
-	if len(m.fields) != 7 || strings.Contains(m.nodeView(), "Название ноды") {
+	m.openRoute(newRoute)
+	if len(m.fields) != 7 || strings.Contains(m.routeEditorView(), "Название ноды") {
 		t.Fatal("redundant name field remains")
 	}
 	for i, v := range []string{"nl1_in", "nl1_out", "127.0.0.1", "10447", "5s", "30s", "30s"} {
 		m.fields[i].SetValue(v)
 	}
-	m.area.SetValue("public [2001:db8::1]:443 primary 1 check enabled 3s 2 2\nnb 100.100.10.20:443 backup 1 check enabled 3s 2 2")
+	m.servers = []haproxy.Server{
+		{Name: "public", Address: "2001:db8::1", Port: 443, Weight: 1, HealthCheck: true},
+		{Name: "nb", Address: "100.100.10.20", Port: 443, Backup: true, Weight: 1, HealthCheck: true},
+	}
 	if e = m.candidate(); e != nil {
 		t.Fatal(e)
 	}
@@ -91,5 +95,59 @@ func TestFifthNodeEditor(t *testing.T) {
 	backend, e := m.s.Document.Backend("nl1_out")
 	if e != nil || len(backend.Servers) != 2 || !backend.Servers[1].Backup {
 		t.Fatal(backend, e)
+	}
+}
+
+func TestCopyRouteOffersFreePortAndKeepsIndependentBackend(t *testing.T) {
+	m := sampleModel(t)
+	withListener := append(m.s.Document.Bytes(), []byte("\nlisten reserved\n\tbind 127.0.0.2:10447\n")...)
+	var err error
+	m.s.Document, err = haproxy.Parse(withListener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runeKey := func(r rune) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}} }
+	m = press(m, tea.KeyMsg{Type: tea.KeyTab})
+	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.copySource != "de1_in" || m.fields[routePortField].Value() != "10448" || len(m.servers) != 2 {
+		t.Fatal(m.View())
+	}
+	m.fields[routePortField].SetValue("10447")
+	m = press(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.mode != "editor" || m.focus != routePortField || !strings.Contains(m.notice, "F3 — выбрать 10448") {
+		t.Fatal(m.mode, m.notice)
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyF3})
+	m = press(m, tea.KeyMsg{Type: tea.KeyF2})
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m.serverFields[1].SetValue("2001:db8::2")
+	m = press(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	m = press(m, tea.KeyMsg{Type: tea.KeyCtrlS})
+	if m.mode != "confirm" || string(m.s.Document.Bytes()) != string(withListener) {
+		t.Fatal(m.mode, m.notice)
+	}
+	next, complete := m.Update(runeKey('y'))
+	next, _ = next.Update(complete())
+	m = next.(Model)
+	f, err := m.s.Document.Frontend("de1_in_copy")
+	if err != nil || f.Bind.Port != 10448 || f.Backend != "de1_out_copy" {
+		t.Fatal(f, err)
+	}
+	original, err := m.s.Document.Server("de1_out", "de1-public")
+	if err != nil || original.Address != "212.113.112.170" {
+		t.Fatal(original, err)
+	}
+	updated, err := m.s.Document.Server("de1_out_copy", "de1-public")
+	if err != nil || updated.Address != "2001:db8::2" {
+		t.Fatal(updated, err)
+	}
+	contents := string(m.s.Document.Bytes())
+	if strings.Count(contents, "option tcplog") != 2 || strings.Count(contents, "maxconn 32") != 4 {
+		t.Fatal(contents)
+	}
+	m = press(m, runeKey('c'))
+	if m.fields[0].Value() != "de1_in_copy2" || m.fields[routePortField].Value() != "10449" {
+		t.Fatal(m.View())
 	}
 }

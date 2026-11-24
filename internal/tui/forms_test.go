@@ -6,6 +6,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -45,8 +46,8 @@ func TestStructuredSettingsAndCancel(t *testing.T) {
 }
 func TestServerFormAndConfirmedDelete(t *testing.T) {
 	m := sampleModel(t)
-	m.editor(false)
-	before := m.area.Value()
+	m.openRoute(editRoute)
+	before := slices.Clone(m.servers)
 	m = press(m, tea.KeyMsg{Type: tea.KeyF2})
 	if m.mode != "servers" {
 		t.Fatal(m.mode)
@@ -56,24 +57,24 @@ func TestServerFormAndConfirmedDelete(t *testing.T) {
 		t.Fatal(m.mode)
 	}
 	m.serverFields[0].SetValue("public6")
-	m.serverFields[1].SetValue("[2001:db8::1]:443")
-	m.serverFields[2].SetValue("backup")
+	m.serverFields[1].SetValue("2001:db8::1")
+	m.serverFields[serverRoleField].SetValue("backup")
 	if e := m.storeServer(); e != nil {
 		t.Fatal(e)
 	}
-	if !strings.Contains(m.area.Value(), "public6 [2001:db8::1]:443 backup") {
-		t.Fatal(m.area.Value())
+	if added := m.servers[2]; added.Name != "public6" || added.Address != "2001:db8::1" || added.Port != 443 || !added.Backup {
+		t.Fatal(added)
 	}
 	m.serverIndex = 2
 	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	if m.mode != "confirm" || len(m.serverLines()) != 3 {
+	if m.mode != "confirm" || len(m.servers) != 3 {
 		t.Fatal("deleted without confirmation")
 	}
 	msg := m.action()
 	n, _ := m.Update(msg)
 	m = n.(Model)
-	if m.mode != "servers" || m.area.Value() != before {
-		t.Fatal("confirmed deletion not applied to editor", m.mode, m.area.Value())
+	if m.mode != "servers" || !slices.Equal(m.servers, before) {
+		t.Fatal("confirmed deletion not applied to editor", m.mode, m.servers)
 	}
 }
 func TestLayoutSizes(t *testing.T) {
@@ -86,7 +87,7 @@ func TestLayoutSizes(t *testing.T) {
 			case "actions":
 				m = press(m, tea.KeyMsg{Type: tea.KeyTab})
 			case "editor":
-				m.editor(false)
+				m.openRoute(editRoute)
 			case "servers":
 				m.mode = "servers"
 			case "serverform":

@@ -3,9 +3,77 @@ package haproxy
 import (
 	"bytes"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 )
+
+// CopyRoute duplicates the source proxy sections beside their originals so that
+// they remain under the same defaults, then updates the new frontend's bind.
+func (d *Document) CopyRoute(source string, target Frontend) error {
+	if err := d.ensureEditable(); err != nil {
+		return err
+	}
+	if err := validateFrontend(target); err != nil {
+		return err
+	}
+	if target.Backend == "" || target.Backend == target.Name {
+		return fmt.Errorf("%w: copy requires a distinct backend name", ErrInvalid)
+	}
+	for _, name := range []string{target.Name, target.Backend} {
+		if err := d.nameAvailable(name, -1); err != nil {
+			return fmt.Errorf("%w: proxy %q", err, name)
+		}
+	}
+	frontend, err := d.Frontend(source)
+	if err != nil {
+		return err
+	}
+	if err := d.checkBindConflict(target.Bind, ""); err != nil {
+		return err
+	}
+	work := d.clone()
+	if err := work.copyProxy(SectionBackend, frontend.Backend, target.Backend, "", ""); err != nil {
+		return err
+	}
+	if err := work.copyProxy(SectionFrontend, source, target.Name, frontend.Backend, target.Backend); err != nil {
+		return err
+	}
+	if err := work.UpdateFrontend(target.Name, target); err != nil {
+		return err
+	}
+	*d = *work
+	return nil
+}
+
+func (d *Document) copyProxy(kind SectionKind, source, name, oldBackend, newBackend string) error {
+	i, err := d.uniqueSection(kind, source)
+	if err != nil {
+		return err
+	}
+	s := d.sections[i]
+	duplicate := []line{{raw: replaceSectionName(d.lines[s.start].raw, name, d.newline)}}
+	for _, l := range d.lines[s.start+1 : s.end] {
+		fields := headerFields(l.raw)
+		if len(fields) > 0 && fields[0] == "id" {
+			continue // HAProxy assigns a new proxy ID.
+		}
+		raw := l.raw
+		if oldBackend != "" && len(fields) >= 2 && fields[0] == "use_backend" && fields[1] == oldBackend {
+			tokens := fieldsAt(raw)
+			tokens[1] = newBackend
+			raw = []byte(string(indent(raw)) + strings.Join(tokens, " ") + string(lineEnding(raw, d.newline)))
+		}
+		duplicate = append(duplicate, line{raw: raw})
+	}
+	last := &d.lines[s.end-1].raw
+	if !bytes.HasSuffix(*last, []byte("\n")) {
+		*last = append(*last, d.newline...)
+	}
+	d.lines = slices.Insert(d.lines, s.end, duplicate...)
+	d.reparse()
+	return nil
+}
 
 func (d *Document) CreateFrontend(frontend Frontend) error {
 	if err := d.ensureEditable(); err != nil {
@@ -170,7 +238,7 @@ func (d *Document) CreateServer(backendName string, server Server) error {
 	if err := d.ensureEditable(); err != nil {
 		return err
 	}
-	if err := validateServer(server); err != nil {
+	if err := ValidateServer(server); err != nil {
 		return err
 	}
 	work := d.clone()
@@ -195,7 +263,7 @@ func (d *Document) UpdateServer(backendName, serverName string, server Server) e
 	if err := d.ensureEditable(); err != nil {
 		return err
 	}
-	if err := validateServer(server); err != nil {
+	if err := ValidateServer(server); err != nil {
 		return err
 	}
 	work := d.clone()
@@ -271,6 +339,10 @@ func (d *Document) nameAvailable(name string, except int) error {
 		}
 	}
 	return nil
+}
+
+func (d *Document) ProxyNameAvailable(name string) bool {
+	return d.nameAvailable(name, -1) == nil
 }
 
 func (d *Document) backendReferences(name string) []string {

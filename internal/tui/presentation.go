@@ -46,6 +46,8 @@ func fieldRow(label string, f textinput.Model, focused bool, width int) string {
 	if focused {
 		prefix = "› "
 		style = accent
+	} else {
+		f.Blur()
 	}
 	return prefix + style.Render(fmt.Sprintf("%-23s", label)) + " " + f.View()
 }
@@ -61,10 +63,8 @@ func (m Model) View() string {
 		return m.preferencesView()
 	case "actions":
 		return m.actionsView()
-	case "editor":
-		return m.nodeView()
-	case "servers":
-		return m.serversView()
+	case "editor", "servers":
+		return m.routeEditorView()
 	case "serverform":
 		return m.serverFormView()
 	case "confirm":
@@ -108,7 +108,7 @@ type routeAction struct {
 func (m Model) routeActions(hasRoute bool) []routeAction {
 	actions := []routeAction{{"a", "Добавить маршрут"}}
 	if hasRoute {
-		actions = []routeAction{{"e", "Редактировать маршрут"}, {"a", "Добавить маршрут"},
+		actions = []routeAction{{"e", "Редактировать маршрут"}, {"c", "Создать на основании"}, {"a", "Добавить маршрут"},
 			{"t", "Проверить TCP"}, {"h", "Проверить TLS"}, {"i", "Статистика Runtime API"}, {"d", "Удалить маршрут"}}
 	}
 	actions = append(actions, routeAction{"/", "Найти маршрут"},
@@ -148,10 +148,10 @@ func (m Model) routesView() string {
 	rows := m.rows()
 	state := fmt.Sprintf("%s  •  %d маршрутов", m.cfg.HAProxy.Mode, len(rows))
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
-		state = "Есть несохранённые изменения  •  " + state
+		state = "Не сохранено  •  " + state
 	}
 	help := hint("Enter", "править") + "   " + hint("Tab / ?", "действия") + "\n" +
-		hint("A", "добавить") + "   " + hint("/", "поиск") + "   " + hint("Q", "выход") + "\n" +
+		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("/", "поиск") + "   " + hint("Q", "выход") + "\n" +
 		hint("S", "сохранить") + "   " + hint("P", "применить")
 	w := m.width - 4
 	budget := m.height - 10
@@ -238,76 +238,142 @@ func (m Model) routesView() string {
 	}
 	return m.screen("Маршруты", state, search+body, help)
 }
-func (m Model) nodeView() string {
-	labels := []string{"Frontend", "Backend", "Адрес прослушивания", "Локальный порт", "Connect timeout", "Client timeout", "Server timeout"}
-	var b strings.Builder
-	start := max(0, m.focus-max(3, m.height-14)+1)
-	end := min(len(m.fields), start+max(3, m.height-14))
-	for i := start; i < end; i++ {
-		b.WriteString(fieldRow(labels[i], m.fields[i], i == m.focus, m.width-4) + "\n")
+func (m Model) editorPanelWidth() int {
+	width := m.width - 4
+	if width >= 90 {
+		return (width - 3) / 2
 	}
-	b.WriteString("\n" + accent.Render(fmt.Sprintf("Удалённые серверы  %d", len(m.serverLines()))) + "\n")
-	for i, line := range m.serverLines() {
-		if i >= 2 {
-			break
-		}
-		v := strings.Fields(line)
-		if len(v) == 9 {
-			b.WriteString(muted.Render("  "+v[0]+"  ") + normal.Render(v[1]) + "\n")
-		}
-	}
-	title := "Новый маршрут"
-	if m.editing != "" {
-		title = "Редактирование маршрута"
-	}
-	return m.screen(title, "Маршрут и параметры соединения", b.String(), hint("Tab / ↑↓", "поле")+"   "+hint("F2", "серверы")+"\n"+hint("Ctrl+S", "предпросмотр")+"   "+hint("Esc", "отмена"))
+	return width
 }
-func (m Model) serversView() string {
-	var b strings.Builder
-	lines := m.serverLines()
-	b.WriteString(muted.Render("  Имя                Адрес                     Роль") + "\n")
-	start := max(0, m.serverIndex-max(2, m.height-13)+1)
-	for i := start; i < len(lines) && i < start+max(2, m.height-13); i++ {
-		v := strings.Fields(lines[i])
-		if len(v) != 9 {
-			continue
+
+func (m *Model) resizeRouteInputs() {
+	width := max(10, m.editorPanelWidth()-27)
+	for _, fields := range [][]textinput.Model{m.fields, m.serverFields} {
+		for i := range fields {
+			fields[i].Width = width
+			fields[i].SetCursor(fields[i].Position())
 		}
+	}
+}
+
+func (m Model) routeEditorView() string {
+	editingServers := m.mode == "servers"
+	title, subtitle := "Новый маршрут", "Параметры и серверы"
+	if m.copySource != "" {
+		title, subtitle = "Создать на основании", "Источник: "+m.copySource
+	} else if m.editing != "" {
+		title, subtitle = "Маршрут", m.editing
+	}
+	var hints []string
+	if editingServers {
+		hints = []string{
+			hint("A", "добавить") + "   " + hint("Enter", "править") + "   " + hint("D", "удалить"),
+			hint("Ctrl+↑↓", "порядок") + "   " + hint("F2", "параметры"),
+		}
+	} else {
+		row := hint("Tab / ↑↓", "поля") + "   " + hint("F2", "серверы")
+		if m.editing == "" {
+			row += "   " + hint("F3", "порт")
+		}
+		hints = []string{row}
+	}
+	hints = append(hints, hint("Ctrl+S", "предпросмотр")+"   "+hint("Esc", "назад"))
+
+	width := m.editorPanelWidth()
+	limit := m.height - len(hints) - 8
+	parameters := []string{panelTitle("Параметры маршрута", !editingServers)}
+	start := max(0, m.focus-limit+1)
+	for i := start; i < min(len(m.fields), start+limit); i++ {
+		parameters = append(parameters, fieldRow(routeLabels[i], m.fields[i], !editingServers && m.focus == i, width))
+	}
+	servers := []string{panelTitle(fmt.Sprintf("Серверы · %d", len(m.servers)), editingServers)}
+	if len(m.servers) == 0 {
+		servers = append(servers, "  Добавьте первый сервер клавишей A.")
+	}
+	nameWidth := min(18, width/3-2)
+	addressWidth := width - nameWidth - 14
+	start = max(0, m.serverIndex-limit+1)
+	for i := start; i < min(len(m.servers), start+limit); i++ {
+		server := m.servers[i]
 		role := "основной"
-		if v[2] == "backup" {
+		if server.Disabled {
+			role = "выключен"
+		} else if server.Backup {
 			role = "резервный"
 		}
-		if v[5] == "disabled" {
-			role = "выключен"
+		address := net.JoinHostPort(server.Address, strconv.Itoa(server.Port))
+		if len(address) > addressWidth {
+			port := ":" + strconv.Itoa(server.Port)
+			address = short(strings.TrimSuffix(address, port), addressWidth-len(port)) + port
 		}
-		row := fmt.Sprintf("  %-18s %-25s %s", short(v[0], 18), short(v[1], 25), role)
-		if i == m.serverIndex {
-			row = selected.Width(m.width - 4).Render("› " + strings.TrimPrefix(row, "  "))
+		row := fmt.Sprintf("  %-*s %-*s %s", nameWidth, short(server.Name, nameWidth), addressWidth, address, role)
+		if editingServers && i == m.serverIndex {
+			row = selected.Width(width).Render("› " + row[2:])
 		}
-		b.WriteString(row + "\n")
+		servers = append(servers, row)
 	}
-	if len(lines) == 0 {
-		b.WriteString("\nДобавьте первый сервер клавишей A.\n")
+
+	body := strings.Join(parameters, "\n")
+	if width < m.width-4 {
+		body = joinEditorPanels(width, parameters, servers)
+	} else if editingServers {
+		body = strings.Join(servers, "\n")
+	} else {
+		subtitle += fmt.Sprintf(" · серверы: %d", len(m.servers))
 	}
-	b.WriteString("\n" + muted.Render("Порядок резервов важен при одном основном сервере.") + "\n" + muted.Render("При allbackups применяется балансировка."))
-	return m.screen("Серверы ноды", "Нода / удалённые серверы", b.String(), hint("A", "добавить")+"   "+hint("Enter", "изменить")+"   "+hint("D", "удалить")+"\n"+hint("Ctrl+↑↓", "порядок")+"   "+hint("Esc", "к маршруту"))
+	return m.screen(title, subtitle, body, strings.Join(hints, "\n"))
 }
+
+func panelTitle(title string, focused bool) string {
+	if focused {
+		return accent.Bold(true).Render("▸ " + title)
+	}
+	return muted.Render("  " + title)
+}
+
+func joinEditorPanels(width int, left, right []string) string {
+	for _, panel := range [][]string{left, right} {
+		for i, line := range panel {
+			panel[i] = ansi.Truncate(line, width, "…")
+		}
+	}
+	first := lipgloss.NewStyle().Width(width + 3).Render(strings.Join(left, "\n"))
+	return lipgloss.JoinHorizontal(lipgloss.Top, first, strings.Join(right, "\n"))
+}
+
 func (m Model) serverFormView() string {
-	var b strings.Builder
-	start := max(0, m.serverFocus-max(3, m.height-12)+1)
-	for i := start; i < len(m.serverFields) && i < start+max(3, m.height-12); i++ {
-		f := m.serverFields[i]
-		if i == 2 || i == 4 || i == 5 {
-			value := displayChoice(f.Value())
-			if i == m.serverFocus {
+	width := m.editorPanelWidth()
+	limit := m.height - 9
+	rows := make([]string, 0, len(m.serverFields))
+	for i, field := range m.serverFields {
+		focused := i == m.serverFocus
+		if i == serverRoleField || i == serverHealthField || i == serverStateField {
+			prefix, style := "  ", muted
+			value := displayChoice(field.Value())
+			if focused {
+				prefix, style = "› ", accent
 				value = accent.Render("‹ " + value + " ›")
 			}
-			b.WriteString(fmt.Sprintf("  %-23s %s\n", serverLabels[i], value))
+			rows = append(rows, prefix+style.Render(fmt.Sprintf("%-23s", serverLabels[i]))+" "+value)
 		} else {
-			b.WriteString(fieldRow(serverLabels[i], f, i == m.serverFocus, m.width-4) + "\n")
+			rows = append(rows, fieldRow(serverLabels[i], field, focused, width))
 		}
 	}
-	b.WriteString("\n" + muted.Render("Адрес: host:port или [IPv6]:port. «-» — наследовать."))
-	return m.screen("Сервер", "Отдельный адрес и параметры проверки", b.String(), hint("Tab / ↑↓", "поле")+"   "+hint("Пробел", "выбор")+"\n"+hint("Ctrl+S", "готово")+"   "+hint("Esc", "назад"))
+	var body string
+	if width < m.width-4 {
+		body = joinEditorPanels(width,
+			append([]string{panelTitle("Подключение", m.serverFocus < serverHealthField)}, rows[:serverHealthField]...),
+			append([]string{panelTitle("Состояние и проверки", m.serverFocus >= serverHealthField)}, rows[serverHealthField:]...))
+	} else {
+		start := max(0, m.serverFocus-limit+1)
+		body = strings.Join(rows[start:min(len(rows), start+limit)], "\n")
+	}
+	title := "Редактировать сервер"
+	if m.serverNew {
+		title = "Добавить сервер"
+	}
+	return m.screen(title, m.fields[0].Value()+" · «-» — наследовать", body,
+		hint("Tab / ↑↓", "поля")+"   "+hint("Пробел", "выбор")+"\n"+hint("Ctrl+S", "в черновик")+"   "+hint("Esc", "отмена"))
 }
 func displayChoice(s string) string {
 	if v := map[string]string{"primary": "Основной", "backup": "Резервный", "check": "Включён", "nocheck": "Выключен", "inherit": "Наследовать", "enabled": "Включён", "disabled": "Выключен", "true": "Да", "false": "Нет"}[s]; v != "" {
