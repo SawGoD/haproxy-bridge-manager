@@ -530,10 +530,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.detailOffset = min(last, max(0, min(m.detailOffset, last)+step))
 			}
-		case "i":
-			if len(rows) > 0 {
-				m.mode, m.overviewTab, m.overviewOffset, m.overviewServer, m.notice = "overview", 3, 0, 0, ""
-			}
 		case "g":
 			if m.cfg.HAProxy.Mode == "docker" {
 				m.busy = true

@@ -108,7 +108,7 @@ func (m Model) routeActions(hasRoute bool) []routeAction {
 	actions := []routeAction{{"a", "Добавить маршрут"}}
 	if hasRoute {
 		actions = []routeAction{{"c", "Создать на основании"}, {"a", "Добавить маршрут"},
-			{"t", "Проверка конфига и тест TCP"}, {"h", "Проверка конфига и тест TLS"}, {"i", "Статистика Runtime API"}, {"d", "Удалить маршрут"}}
+			{"t", "Проверка конфига и тест TCP"}, {"h", "Проверка конфига и тест TLS"}, {"d", "Удалить маршрут"}}
 	} else {
 		actions = append(actions, routeAction{"t", "Проверить конфигурацию"})
 	}
@@ -159,8 +159,8 @@ func (m Model) routesView() string {
 		hint("S", "сохранить") + "  " + hint("P", "применить") + "  " + hint("Q", "выход") + "  " + hint("/", "поиск")
 	w := m.width - 4
 	sections := m.dashboardNavigation()
-	navigation := strings.Join(sections[1:4], "  ") + "  " + hint("Tab", "меню") + "\n" +
-		strings.Join(sections[4:], "   ") + "\n"
+	navigation := strings.Join(sections[1:3], "  ") + "  " + hint("Tab", "меню") + "\n" +
+		strings.Join(sections[3:], "   ") + "\n"
 	var search string
 	if m.search {
 		search = accent.Render("Поиск: " + m.filter + "▏")

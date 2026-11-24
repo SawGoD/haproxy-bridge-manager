@@ -129,7 +129,7 @@ func (m Model) dashboardDetailWidth(width, listWidth int) int {
 
 func (m Model) dashboardNavigation() []string {
 	items := []string{dashboardSelection.Render("› Маршруты"), hint("F2", "Серверы"),
-		hint("I", "Статистика"), hint("B", "Бэкапы")}
+		hint("B", "Бэкапы")}
 	if m.cfg.HAProxy.Mode == "docker" {
 		items = append(items, hint("G", "Контейнер"))
 	}
