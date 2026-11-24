@@ -47,7 +47,7 @@ def main():
     STATE.mkdir(mode=0o700, exist_ok=True)
     config = STATE / "haproxy.cfg"
     if not config.exists():
-        shutil.copy(LAB / "haproxy.cfg", config)
+        shutil.copy(LAB / "haproxy.cfg.example", config)
 
     subprocess.run(["docker", "compose", "-f", str(LAB / "compose.yaml"), "up", "-d", "--wait"], check=True)
     with tempfile.TemporaryDirectory(prefix="hbm-lab-", dir="/tmp") as session:

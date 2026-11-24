@@ -1,6 +1,7 @@
 /bin/
 /dist/
 /reports/
+/lab/haproxy.cfg
 /lab/.state/
 *.test
 coverage.out
