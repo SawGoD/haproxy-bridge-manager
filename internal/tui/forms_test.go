@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/SawGoD/haproxy-bridge/internal/monitor"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -112,6 +113,42 @@ func TestLayoutSizes(t *testing.T) {
 				t.Fatal("status hidden")
 			}
 		}
+	}
+}
+
+func TestMainRouteMonitoringShowsFailoverAndDiagnostic(t *testing.T) {
+	m := sampleModel(t)
+	m.cfg.Monitoring.Socket = "/test/runtime.sock"
+	snapshot, err := monitor.Parse(`# pxname,svname,status,scur,stot,econ,check_status,lastchg,act,bck,type,downtime,check_duration,last_chk
+de1_out,BACKEND,UP,1,8,3,,90,0,1,1,12,,
+de1_out,primary,DOWN,0,5,3,L4CON,22,0,0,2,22,14,Connection refused
+de1_out,reserve,UP,1,3,0,L4OK,90,0,1,2,0,8,
+usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _ := m.Update(statsMsg{snapshot: snapshot, path: m.cfg.Monitoring.Socket})
+	m = next.(Model)
+	for _, part := range []string{"UP · резерв", "Обслуживают: reserve", "primary осн.", "DOWN · L4CON", "1m30s", "Простой backend: 12s", "Сессии: 0 сейчас / 5 всего", "14 мс", "Connection refused"} {
+		if !strings.Contains(m.View(), part) {
+			t.Fatalf("missing %q from %s", part, m.View())
+		}
+	}
+	next, _ = m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
+	m = next.(Model)
+	for i := 0; i < 4; i++ {
+		m = press(m, tea.KeyMsg{Type: tea.KeyPgDown})
+		if strings.Contains(m.View(), "Connection refused") {
+			break
+		}
+	}
+	if !strings.Contains(m.View(), "Connection refused") || m.cursor != 0 {
+		t.Fatal(m.View())
+	}
+	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
+	if !strings.Contains(m.View(), "usa1_out  DOWN · 30s") || m.detailOffset != 0 {
+		t.Fatal(m.View())
 	}
 }
 

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"github.com/SawGoD/haproxy-bridge/internal/monitor"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -150,11 +149,10 @@ func (m Model) routesView() string {
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
 		state = "Не сохранено  •  " + state
 	}
-	help := hint("Enter", "править") + "   " + hint("Tab / ?", "действия") + "\n" +
-		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("/", "поиск") + "   " + hint("Q", "выход") + "\n" +
-		hint("S", "сохранить") + "   " + hint("P", "применить")
+	help := hint("↑↓", "маршрут") + "   " + hint("Pg↑↓", "детали") + "   " + hint("I", "подробнее") + "\n" +
+		hint("Enter", "править") + "   " + hint("Tab", "меню") + "   " + hint("/", "поиск") + "\n" +
+		hint("A", "добавить") + "   " + hint("C", "копия") + "   " + hint("Q", "выход")
 	w := m.width - 4
-	budget := m.height - 10
 	var search string
 	if m.search {
 		search = accent.Render("Поиск: " + m.filter + "▏")
@@ -162,7 +160,6 @@ func (m Model) routesView() string {
 		search = accent.Render("Фильтр: " + m.filter + "  •  Esc сбросить")
 	}
 	if search != "" {
-		budget--
 		search += "\n"
 	}
 	if len(rows) == 0 {
@@ -173,60 +170,23 @@ func (m Model) routesView() string {
 		return m.screen("Маршруты", state, search+body, help)
 	}
 	cursor := min(max(0, m.cursor), len(rows)-1)
-	f := rows[cursor]
-	bind := net.JoinHostPort(f.Bind.Address, strconv.Itoa(f.Bind.Port))
-	active := monitor.Active(m.stats, f.Backend)
-	details := []string{accent.Bold(true).Render(f.Name),
-		muted.Render("Backend  ") + normal.Render(f.Backend),
-		muted.Render("Адрес    ") + normal.Render(bind),
-		muted.Render("Активный ") + normal.Render(active)}
-	if w < 78 {
-		details = []string{accent.Render(f.Name) + muted.Render(" → ") + normal.Render(f.Backend),
-			muted.Render("Адрес    ") + normal.Render(bind), muted.Render("Активный ") + normal.Render(active)}
-	}
-	if backend, err := m.s.Document.Backend(f.Backend); err == nil {
-		details = append(details, muted.Render(fmt.Sprintf("Серверы  %d", len(backend.Servers))))
-		for _, server := range backend.Servers {
-			role := "основной"
-			if server.Disabled {
-				role = "выключен"
-			} else if server.Backup {
-				role = "резервный"
-			}
-			endpoint := net.JoinHostPort(server.Address, strconv.Itoa(server.Port))
-			details = append(details, normal.Render(server.Name)+muted.Render("  "+role+"  "+endpoint))
-		}
-	}
-	listWidth, limit := w, max(1, budget-4)
-	if budget >= 9 {
-		limit = budget - 6
-	}
-	if w >= 78 {
-		listWidth, limit = w/2-1, budget-1
-	}
-	nameWidth := min(28, listWidth-18)
+	details := m.routeDetails(rows[cursor])
+	listWidth, start, end, detailLimit := m.routeLayout(len(rows), cursor)
+	nameWidth := min(24, listWidth-23)
 	header := muted.Render(fmt.Sprintf("  %-*s %-6s %s", nameWidth, "Frontend", "Порт", "Статус"))
 	list := []string{header}
-	start := max(0, cursor-limit+1)
-	for i := start; i < min(len(rows), start+limit); i++ {
+	for i := start; i < end; i++ {
 		route := rows[i]
-		status := "UNKNOWN"
-		for _, server := range m.stats {
-			if server.Backend == route.Backend {
-				if status == "UNKNOWN" {
-					status = server.Status
-				} else if status != server.Status {
-					status = "MIXED"
-				}
-			}
-		}
-		line := fmt.Sprintf("  %-*s %-6d %s", nameWidth, short(route.Name, nameWidth), route.Bind.Port, status)
+		status := routeStatus(m.stats.Backends[route.Backend])
+		line := fmt.Sprintf("  %-*s %-6d %s", nameWidth, short(route.Name, nameWidth), route.Bind.Port, short(status, listWidth-nameWidth-10))
 		if i == cursor {
 			line = selected.Width(listWidth).Render("› " + line[2:])
 		}
 		list = append(list, line)
 	}
 	body := strings.Join(list, "\n")
+	offset := min(m.detailOffset, max(0, len(details)-detailLimit))
+	details = details[offset:min(len(details), offset+detailLimit)]
 	if listWidth < w {
 		detailWidth := w - listWidth - 3
 		for i, line := range details {

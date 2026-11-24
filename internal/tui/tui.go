@@ -31,8 +31,9 @@ type result struct {
 	settingsData *settings.Settings
 }
 type statsMsg struct {
-	servers []monitor.Server
-	err     error
+	snapshot monitor.Snapshot
+	path     string
+	err      error
 }
 type tick time.Time
 type Model struct {
@@ -51,8 +52,9 @@ type Model struct {
 	copySource               string
 	action                   func() tea.Msg
 	busy                     bool
-	stats                    []monitor.Server
-	checked                  time.Time
+	stats                    monitor.Snapshot
+	statsErr                 error
+	detailOffset             int
 	backups                  []backup.Metadata
 	editing                  string
 	search                   bool
@@ -86,6 +88,7 @@ func newLegacy(p string) Model {
 	return m
 }
 func (m *Model) open() {
+	m.stats, m.statsErr, m.detailOffset = monitor.Snapshot{}, nil, 0
 	s, e := app.Open(m.cfg)
 	if e != nil {
 		m.notice = e.Error()
@@ -201,21 +204,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case statsMsg:
-		m.stats = x.servers
-		m.checked = time.Now()
-		if x.err != nil {
-			m.stats = nil
+		if x.path == m.cfg.Monitoring.Socket {
+			m.stats, m.statsErr = x.snapshot, x.err
 		}
 		return m, nil
 	case tick:
 		cmd := tea.Tick(time.Duration(max(1, m.cfg.UI.RefreshInterval))*time.Second, func(t time.Time) tea.Msg { return tick(t) })
-		if m.s != nil && !m.busy {
-			path := m.cfg.Monitoring.Socket
+		if path := m.cfg.Monitoring.Socket; m.s != nil && !m.busy && path != "" {
 			return m, tea.Batch(cmd, func() tea.Msg {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
 				s, e := monitor.Read(ctx, path)
-				return statsMsg{s, e}
+				return statsMsg{snapshot: s, path: path, err: e}
 			})
 		}
 		return m, cmd
@@ -330,6 +330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filter += string(x.Runes)
 			}
 			m.cursor = 0
+			m.detailOffset = 0
 			return m, nil
 		}
 		rows := m.rows()
@@ -367,12 +368,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.filter != "" {
 				m.filter = ""
 				m.cursor = 0
+				m.detailOffset = 0
 			}
 		case "q":
 			return m, tea.Quit
 		case "j", "down":
+			m.detailOffset = 0
 			m.cursor = min(m.cursor+1, max(0, len(rows)-1))
 		case "k", "up":
+			m.detailOffset = 0
 			m.cursor = max(0, m.cursor-1)
 		case "/":
 			m.search = true
@@ -436,20 +440,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				b, e := m.s.Backups.Create(m.s.Path)
 				return result{err: e, text: "Создан backup " + b.ID}
 			}
+		case "pgup", "pgdown":
+			if len(rows) > 0 {
+				_, _, _, height := m.routeLayout(len(rows), m.cursor)
+				last := max(0, len(m.routeDetails(rows[m.cursor]))-height)
+				step := max(1, height-1)
+				if key == "pgup" {
+					step = -step
+				}
+				m.detailOffset = min(last, max(0, min(m.detailOffset, last)+step))
+			}
 		case "i":
 			if len(rows) > 0 {
 				f := rows[m.cursor]
-				var text strings.Builder
-				text.WriteString("Runtime API: наблюдаемые серверы, не прогноз следующего соединения\n")
-				for _, srv := range m.stats {
-					if srv.Backend == f.Backend {
-						fmt.Fprintf(&text, "%s status=%s current=%d total=%d errors=%d check=%s last_change=%s ago backup=%v\n", srv.Name, srv.Status, srv.Current, srv.Total, srv.Errors, srv.Check, srv.LastChange, srv.Backup)
-					}
-				}
-				if len(m.stats) == 0 {
-					text.WriteString("UNKNOWN: Runtime API недоступен")
-				}
-				m.view.SetContent(text.String())
+				lines := append([]string{f.Name}, m.routeDetails(f)...)
+				m.view.SetContent(strings.Join(lines, "\n"))
+				m.view.GotoTop()
+				m.view.SetXOffset(0)
 				m.mode = "view"
 			}
 		case "g":
@@ -513,14 +520,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 func (m Model) connectionWarning(backend string) string {
-	if len(m.stats) == 0 {
-		return "Активные соединения: UNKNOWN (Runtime API недоступен).\n"
+	servers := m.stats.Servers[backend]
+	if len(servers) == 0 {
+		return "Активные соединения: UNKNOWN (нет статистики backend).\n"
 	}
 	var n int64
-	for _, srv := range m.stats {
-		if srv.Backend == backend {
-			n += srv.Current
-		}
+	for _, server := range servers {
+		n += server.Current
 	}
 	return fmt.Sprintf("Серверы backend обслуживают %d соединений.\n", n)
 }
