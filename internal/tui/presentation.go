@@ -145,6 +145,9 @@ func (m Model) actionsView() string {
 
 func (m Model) routesView() string {
 	rows := m.rows()
+	if m.useDashboard() {
+		return m.dashboardView(rows)
+	}
 	state := fmt.Sprintf("%s  •  %d маршрутов", m.cfg.HAProxy.Mode, len(rows))
 	if m.s != nil && string(m.s.Document.Bytes()) != string(m.s.Original) {
 		state = "Не сохранено  •  " + state
@@ -178,11 +181,11 @@ func (m Model) routesView() string {
 	for i := start; i < end; i++ {
 		route := rows[i]
 		status := routeStatus(m.stats.Backends[route.Backend])
-		line := fmt.Sprintf("  %-*s %-6d %s", nameWidth, short(route.Name, nameWidth), route.Bind.Port, short(status, listWidth-nameWidth-10))
+		line := fmt.Sprintf("  %-*s %-6d ", nameWidth, short(route.Name, nameWidth), route.Bind.Port)
 		if i == cursor {
-			line = selected.Width(listWidth).Render("› " + line[2:])
+			line = dashboardSelection.Render("› " + line[2:])
 		}
-		list = append(list, line)
+		list = append(list, line+statusStyle(status).Bold(true).Render(short(status, listWidth-nameWidth-10)))
 	}
 	body := strings.Join(list, "\n")
 	offset := min(m.detailOffset, max(0, len(details)-detailLimit))

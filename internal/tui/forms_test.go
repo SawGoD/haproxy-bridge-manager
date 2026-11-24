@@ -130,9 +130,15 @@ usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
 	}
 	next, _ := m.Update(statsMsg{snapshot: snapshot, path: m.cfg.Monitoring.Socket})
 	m = next.(Model)
-	for _, part := range []string{"UP · резерв", "Обслуживают: reserve", "primary осн.", "DOWN · L4CON", "1m30s", "Простой backend: 12s", "Сессии: 0 сейчас / 5 всего", "14 мс", "Connection refused"} {
-		if !strings.Contains(m.View(), part) {
+	view := ansi.Strip(m.View())
+	for _, part := range []string{"UP · резерв", "Обслуживают: reserve", "основной", "резервный", "DOWN", "Аптайм: 1m30s", "Простой backend: 12s", "Сессии: 0 сейчас / 5 всего", "L4CON · 14 мс", "Connection refused"} {
+		if !strings.Contains(view, part) {
 			t.Fatalf("missing %q from %s", part, m.View())
+		}
+	}
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "› de1_in") && !strings.Contains(line, "10443  UP · резерв") {
+			t.Fatal(line)
 		}
 	}
 	next, _ = m.Update(tea.WindowSizeMsg{Width: 48, Height: 16})
@@ -147,7 +153,7 @@ usa1_out,BACKEND,DOWN,0,0,0,,30,0,0,1,30,,
 		t.Fatal(m.View())
 	}
 	m = press(m, tea.KeyMsg{Type: tea.KeyDown})
-	if !strings.Contains(m.View(), "usa1_out  DOWN · 30s") || m.detailOffset != 0 {
+	if !strings.Contains(ansi.Strip(m.View()), "usa1_out  DOWN · 30s") || m.detailOffset != 0 {
 		t.Fatal(m.View())
 	}
 }

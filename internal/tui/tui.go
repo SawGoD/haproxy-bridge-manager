@@ -443,7 +443,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "pgup", "pgdown":
 			if len(rows) > 0 {
 				_, _, _, height := m.routeLayout(len(rows), m.cursor)
-				last := max(0, len(m.routeDetails(rows[m.cursor]))-height)
+				details := m.routeDetails(rows[m.cursor])
+				if m.useDashboard() {
+					width, _, listWidth, _ := m.dashboardDimensions()
+					details = m.dashboardDetails(rows[m.cursor], width-listWidth-5)
+				}
+				last := max(0, len(details)-height)
 				step := max(1, height-1)
 				if key == "pgup" {
 					step = -step

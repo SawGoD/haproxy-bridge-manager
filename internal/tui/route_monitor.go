@@ -26,27 +26,11 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 	backend := m.stats.Backends[route.Backend]
 	servers := m.stats.Servers[route.Backend]
 	status := routeStatus(backend)
+	status = statusStyle(status).Bold(true).Render(status)
 	if backend.LastChange != nil {
 		status += " · " + backend.LastChange.String()
 	}
-	lines := []string{accent.Bold(true).Render(route.Backend) + "  " + status}
-	switch {
-	case m.cfg.Monitoring.Socket == "":
-		lines = append(lines, "Runtime API: сокет не настроен")
-	case m.statsErr != nil:
-		lines = append(lines, "Runtime API: "+oneLine(m.statsErr.Error()))
-	case m.stats.Servers == nil:
-		lines = append(lines, "Runtime API: ожидание статистики")
-	case len(servers) == 0:
-		lines = append(lines, "Runtime API: нет строк серверов")
-	default:
-		active := monitor.Active(servers)
-		if len(active) == 0 {
-			lines = append(lines, "Активных сессий нет")
-		} else {
-			lines = append(lines, "Обслуживают: "+strings.Join(active, ", "))
-		}
-	}
+	lines := []string{accent.Bold(true).Render(route.Backend) + "  " + status, m.routeSessionLine(servers)}
 	for _, server := range servers {
 		role := "осн."
 		if server.Backup {
@@ -56,7 +40,8 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 		if state == "" {
 			state = "UNKNOWN"
 		}
-		if strings.HasPrefix(state, "DOWN") && server.Check != "" {
+		state = statusStyle(state).Bold(true).Render(state)
+		if strings.HasPrefix(server.Status, "DOWN") && server.Check != "" {
 			state += " · " + oneLine(server.Check)
 		}
 		if server.LastChange != nil {
@@ -67,7 +52,7 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 	if backend.Downtime != nil {
 		lines = append(lines, "Простой backend: "+backend.Downtime.String())
 	}
-	lines = append(lines, "Вход: "+net.JoinHostPort(route.Bind.Address, strconv.Itoa(route.Bind.Port)))
+	lines = append(lines, "Вход: "+routeEndpoint(route))
 	if len(servers) == 0 {
 		if configured, err := m.s.Document.Backend(route.Backend); err == nil {
 			for _, server := range configured.Servers {
@@ -76,19 +61,7 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 		}
 	}
 	for _, server := range servers {
-		lines = append(lines, accent.Render(server.Name),
-			fmt.Sprintf("  Сессии: %d сейчас / %d всего · ошибки: %d", server.Current, server.Total, server.Errors))
-		check := oneLine(server.Check)
-		if check == "" {
-			check = "нет данных"
-		}
-		if server.CheckDuration != nil {
-			check += fmt.Sprintf(" · %d мс", *server.CheckDuration/time.Millisecond)
-		}
-		if backend.OnBackup() && !server.Backup && strings.HasPrefix(server.Status, "DOWN") {
-			check = warning.Render(check)
-		}
-		lines = append(lines, "  Проверка: "+check)
+		lines = append(lines, accent.Render(server.Name), "  "+serverSessions(server), "  Проверка: "+serverCheck(server))
 		if reason := oneLine(server.CheckDetail); reason != "" {
 			lines = append(lines, "  "+reason)
 		}
@@ -96,7 +69,54 @@ func (m Model) routeDetails(route haproxy.Frontend) []string {
 	return lines
 }
 
+func (m Model) routeSessionLine(servers []monitor.Server) string {
+	switch {
+	case m.cfg.Monitoring.Socket == "":
+		return "Runtime API: сокет не настроен"
+	case m.statsErr != nil:
+		return "Runtime API: " + oneLine(m.statsErr.Error())
+	case m.stats.Servers == nil:
+		return "Runtime API: ожидание статистики"
+	case len(servers) == 0:
+		return "Runtime API: нет строк серверов"
+	default:
+		active := monitor.Active(servers)
+		if len(active) == 0 {
+			return "Активных сессий нет"
+		}
+		return "Обслуживают: " + strings.Join(active, ", ")
+	}
+}
+
+func routeEndpoint(route haproxy.Frontend) string {
+	return net.JoinHostPort(route.Bind.Address, strconv.Itoa(route.Bind.Port))
+}
+
+func serverSessions(server monitor.Server) string {
+	return fmt.Sprintf("Сессии: %d сейчас / %d всего · ошибки: %d", server.Current, server.Total, server.Errors)
+}
+
+func serverCheck(server monitor.Server) string {
+	check := oneLine(server.Check)
+	if check == "" {
+		check = "нет данных"
+	}
+	if server.CheckDuration != nil {
+		check += fmt.Sprintf(" · %d мс", *server.CheckDuration/time.Millisecond)
+	}
+	return check
+}
+
 func (m Model) routeLayout(count, cursor int) (listWidth, start, end, detailHeight int) {
+	if m.useDashboard() {
+		_, height, listWidth, _ := m.dashboardDimensions()
+		limit := height - 4
+		if m.search || m.filter != "" {
+			limit--
+		}
+		start := max(0, cursor-limit+1)
+		return listWidth, start, min(count, start+limit), height - 2
+	}
 	width, height := m.width-4, m.height-10
 	if m.search || m.filter != "" {
 		height--
