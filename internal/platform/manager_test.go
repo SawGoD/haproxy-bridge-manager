@@ -68,8 +68,8 @@ func TestDockerCandidateAndBind(t *testing.T) {
 	if !strings.Contains(args, "src="+candidate) || !strings.Contains(args, "sha256:actual -c -f /cfg/haproxy.cfg") {
 		t.Fatal(args)
 	}
-	if e := d.Apply(context.Background(), p, "restart"); e == nil {
-		t.Fatal("stale inode restart allowed")
+	if e := d.Apply(context.Background(), p, "restart"); !errors.Is(e, ErrRecreateRequired) {
+		t.Fatalf("stale inode restart: %v", e)
 	}
 }
 func TestUnknownContainerAndUnsafeName(t *testing.T) {

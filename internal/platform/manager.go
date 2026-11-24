@@ -49,6 +49,8 @@ type Docker struct {
 	ContainerName, ComposeFile, ServiceName string
 }
 
+var ErrRecreateRequired = errors.New("single-file bind requires recreate after atomic save")
+
 func safe(s string) error {
 	if s == "" || strings.HasPrefix(s, "-") || strings.ContainsAny(s, "\x00\r\n") {
 		return errors.New("empty or unsafe process argument")
@@ -211,6 +213,30 @@ func (d Docker) Visible(ctx context.Context, host string) error {
 	}
 	return nil
 }
+
+// CheckApplyMethod checks restart compatibility without changing the container.
+func (d Docker) CheckApplyMethod(ctx context.Context, host, method string) error {
+	if method != "restart" {
+		return nil
+	}
+	c, err := d.Inspect(ctx)
+	if err != nil {
+		return err
+	}
+	return checkApplyMount(c, host, method)
+}
+
+func checkApplyMount(c Container, host, method string) error {
+	_, single, err := configMount(c, host)
+	if err != nil {
+		return err
+	}
+	if single && method == "restart" {
+		return ErrRecreateRequired
+	}
+	return nil
+}
+
 func (d Docker) Apply(ctx context.Context, host, method string) error {
 	if method == "manual" {
 		return errors.New("manual mode: configuration has not been applied")
@@ -219,15 +245,11 @@ func (d Docker) Apply(ctx context.Context, host, method string) error {
 	if e != nil {
 		return e
 	}
-	_, single, e := configMount(c, host)
-	if e != nil {
+	if e = checkApplyMount(c, host, method); e != nil {
 		return e
 	}
 	switch method {
 	case "restart":
-		if single {
-			return errors.New("single-file bind requires recreate after atomic save")
-		}
 		if e = d.Visible(ctx, host); e != nil {
 			return e
 		}

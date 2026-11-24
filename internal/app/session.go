@@ -111,6 +111,16 @@ func (s *Session) Restore(id string) error {
 	s.Log("restore", id)
 	return s.Reload()
 }
+
+func (s *Session) CheckApplyMethod() error {
+	if s.Settings.HAProxy.Mode != "docker" || s.Settings.Docker.ApplyMethod != "restart" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.Settings.HAProxy.ValidationTimeout)*time.Second)
+	defer cancel()
+	return s.docker().CheckApplyMethod(ctx, s.Path, s.Settings.Docker.ApplyMethod)
+}
+
 func (s *Session) Apply() error {
 	b, h, e := storage.Read(s.Path)
 	if e != nil {
@@ -121,6 +131,9 @@ func (s *Session) Apply() error {
 	}
 	if storage.Hash(s.Document.Bytes()) != h {
 		return errors.New("unsaved changes: save before apply")
+	}
+	if e = s.CheckApplyMethod(); e != nil {
+		return e
 	}
 	if e = s.Validate(b); e != nil {
 		return e
@@ -151,6 +164,9 @@ func (s *Session) Apply() error {
 		return (platform.Native{Runner: s.Runner, Binary: s.Settings.Native.Binary, Service: s.Settings.Native.ServiceName}).Apply(ctx, method)
 	}
 	e = apply()
+	if errors.Is(e, platform.ErrRecreateRequired) {
+		return e
+	}
 	if e == nil {
 		e = s.checkListeners(ctx)
 	}

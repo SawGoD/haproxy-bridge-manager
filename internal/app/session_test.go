@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/SawGoD/haproxy-bridge/internal/haproxy"
+	"github.com/SawGoD/haproxy-bridge/internal/platform"
 	"github.com/SawGoD/haproxy-bridge/internal/settings"
 	"github.com/SawGoD/haproxy-bridge/internal/storage"
 	"net"
@@ -41,6 +43,38 @@ func TestOfficialRejectAndConflict(t *testing.T) {
 	os.WriteFile(s.Path, []byte("# external\n"), 0600)
 	if e = s.Apply(); !errors.Is(e, storage.ErrHashConflict) {
 		t.Fatalf("conflict not detected: %v", e)
+	}
+}
+
+type singleFileMount struct{ path string }
+
+func (r singleFileMount) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	if name != "docker" || len(args) == 0 || args[0] != "inspect" {
+		return nil, fmt.Errorf("unexpected command: %s %v", name, args)
+	}
+	return fmt.Appendf(nil, `[{"Mounts":[{"Type":"bind","Source":%q,"Destination":"/cfg/haproxy.cfg"}]}]`, r.path), nil
+}
+
+func TestSingleFileRestartStopsBeforeBackup(t *testing.T) {
+	dir := t.TempDir()
+	cfg := settings.Default()
+	cfg.HAProxy.Mode = "docker"
+	cfg.Docker.ApplyMethod = "restart"
+	cfg.General.ConfigPath = filepath.Join(dir, "haproxy.cfg")
+	cfg.General.BackupDir = filepath.Join(dir, "backups")
+	if err := os.WriteFile(cfg.General.ConfigPath, []byte("global\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Runner = singleFileMount{path: s.Path}
+	if err := s.Apply(); err != platform.ErrRecreateRequired {
+		t.Fatalf("expected a preflight refusal without rollback, got %v", err)
+	}
+	if _, err := os.Stat(cfg.General.BackupDir); !os.IsNotExist(err) {
+		t.Fatalf("blocked apply touched backups: %v", err)
 	}
 }
 

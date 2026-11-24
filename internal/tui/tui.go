@@ -3,6 +3,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/SawGoD/haproxy-bridge/internal/app"
 	"github.com/SawGoD/haproxy-bridge/internal/backup"
@@ -175,6 +176,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case result:
 		m.busy = false
+		if errors.Is(x.err, platform.ErrRecreateRequired) {
+			m.notice = "O → Docker → Способ применения: recreate"
+			m.view.SetContent("Применение остановлено.\n\nВ Docker смонтирован отдельный haproxy.cfg.\nДля нового файла нужен recreate.\n\nO → Docker → «Способ применения»\nВыберите recreate и сохраните настройки.\nЗатем повторите действие.")
+			m.view.GotoTop()
+			m.view.SetXOffset(0)
+			m.mode = "view"
+			return m, nil
+		}
 		if x.settingsData != nil && x.err == nil {
 			m.cfg = *x.settingsData
 		}
@@ -413,6 +422,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			})
 		case "x":
 			m.preview("Save & Apply: возможен разрыв активных TCP-соединений.\n"+diff(m.s.Original, m.s.Document.Bytes()), func() tea.Msg {
+				if e := m.s.CheckApplyMethod(); e != nil {
+					return result{err: e}
+				}
 				if e := m.s.Save(); e != nil {
 					return result{err: e}
 				}

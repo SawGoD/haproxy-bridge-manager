@@ -13,6 +13,7 @@ validation_timeout_seconds = 15
 container_name = "haproxy"
 compose_file = "/opt/haproxy/compose.yaml"
 service_name = "haproxy"
+# Для отдельного bind mount файла haproxy.cfg требуется recreate.
 apply_method = "recreate"
 
 [native]
